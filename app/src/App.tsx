@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Dashboard } from '@/pages/Dashboard';
 import { TodoPage } from '@/pages/TodoPage';
@@ -11,7 +12,12 @@ import { useAppStore } from '@/stores/appStore';
 import { AnimatePresence, motion } from 'framer-motion';
 
 function App() {
-  const { currentPage, backgroundImage } = useAppStore();
+  const { currentPage, backgroundImage, initializeData } = useAppStore();
+
+  useEffect(() => {
+    // Initialize data from database on app start
+    initializeData();
+  }, [initializeData]);
 
   const renderPage = () => {
     switch (currentPage) {

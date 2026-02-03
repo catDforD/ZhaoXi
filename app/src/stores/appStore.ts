@@ -12,6 +12,7 @@ import type {
   WishlistItem,
   Statistics,
 } from '@/types';
+import * as api from '@/lib/api';
 
 interface AppState {
   // 当前页面
@@ -20,26 +21,34 @@ interface AppState {
 
   // 待办事项
   todos: Todo[];
-  addTodo: (title: string, priority: 'normal' | 'urgent') => void;
-  toggleTodo: (id: string) => void;
-  deleteTodo: (id: string) => void;
+  isLoadingTodos: boolean;
+  fetchTodos: () => Promise<void>;
+  addTodo: (title: string, priority: 'normal' | 'urgent') => Promise<void>;
+  toggleTodo: (id: string) => Promise<void>;
+  deleteTodo: (id: string) => Promise<void>;
 
   // 长期项目
   projects: Project[];
-  addProject: (title: string, deadline: string) => void;
-  updateProjectProgress: (id: string, progress: number) => void;
-  deleteProject: (id: string) => void;
+  isLoadingProjects: boolean;
+  fetchProjects: () => Promise<void>;
+  addProject: (title: string, deadline: string) => Promise<void>;
+  updateProjectProgress: (id: string, progress: number) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
 
   // 日程事件
   events: CalendarEvent[];
-  addEvent: (event: Omit<CalendarEvent, 'id'>) => void;
-  deleteEvent: (id: string) => void;
+  isLoadingEvents: boolean;
+  fetchEvents: () => Promise<void>;
+  addEvent: (event: Omit<CalendarEvent, 'id'>) => Promise<void>;
+  deleteEvent: (id: string) => Promise<void>;
   getEventsByDate: (date: string) => CalendarEvent[];
 
   // 个人事务
   personalTasks: PersonalTask[];
-  addPersonalTask: (task: Omit<PersonalTask, 'id'>) => void;
-  deletePersonalTask: (id: string) => void;
+  isLoadingPersonalTasks: boolean;
+  fetchPersonalTasks: () => Promise<void>;
+  addPersonalTask: (task: Omit<PersonalTask, 'id'>) => Promise<void>;
+  deletePersonalTask: (id: string) => Promise<void>;
 
   // 热榜数据
   hotList: HotItem[];
@@ -71,6 +80,9 @@ interface AppState {
 
   // 统计数据
   getStatistics: () => Statistics;
+
+  // 初始化数据
+  initializeData: () => Promise<void>;
 }
 
 export const useAppStore = create<AppState>()(
@@ -81,93 +93,178 @@ export const useAppStore = create<AppState>()(
       setCurrentPage: (page) => set({ currentPage: page }),
 
       // 待办事项
-      todos: [
-        { id: '1', title: '活动室ps出售', completed: false, priority: 'normal', createdAt: new Date().toISOString() },
-        { id: '2', title: '伙食费整理', completed: true, priority: 'urgent', createdAt: new Date().toISOString() },
-      ],
-      addTodo: (title, priority) => {
-        const newTodo: Todo = {
-          id: Date.now().toString(),
-          title,
-          completed: false,
-          priority,
-          createdAt: new Date().toISOString(),
-        };
-        set((state) => ({ todos: [newTodo, ...state.todos] }));
+      todos: [],
+      isLoadingTodos: false,
+      fetchTodos: async () => {
+        set({ isLoadingTodos: true });
+        try {
+          const todos = await api.getTodos();
+          set({ todos });
+        } catch (error) {
+          console.error('Failed to fetch todos:', error);
+        } finally {
+          set({ isLoadingTodos: false });
+        }
       },
-      toggleTodo: (id) => {
-        set((state) => ({
-          todos: state.todos.map((todo) =>
-            todo.id === id ? { ...todo, completed: !todo.completed } : todo
-          ),
-        }));
+      addTodo: async (title, priority) => {
+        try {
+          const newTodo = await api.createTodo(title, priority);
+          set((state) => ({ todos: [newTodo, ...state.todos] }));
+        } catch (error) {
+          console.error('Failed to add todo:', error);
+        }
       },
-      deleteTodo: (id) => {
-        set((state) => ({
-          todos: state.todos.filter((todo) => todo.id !== id),
-        }));
+      toggleTodo: async (id) => {
+        const todo = get().todos.find((t) => t.id === id);
+        if (!todo) return;
+        try {
+          await api.updateTodo({
+            id,
+            completed: !todo.completed,
+          });
+          set((state) => ({
+            todos: state.todos.map((t) =>
+              t.id === id ? { ...t, completed: !t.completed } : t
+            ),
+          }));
+        } catch (error) {
+          console.error('Failed to toggle todo:', error);
+        }
+      },
+      deleteTodo: async (id) => {
+        try {
+          await api.deleteTodo(id);
+          set((state) => ({
+            todos: state.todos.filter((t) => t.id !== id),
+          }));
+        } catch (error) {
+          console.error('Failed to delete todo:', error);
+        }
       },
 
       // 长期项目
-      projects: [
-        { id: '1', title: '资料整理', deadline: '2025-12-31', progress: 20, status: 'active' },
-      ],
-      addProject: (title, deadline) => {
-        const newProject: Project = {
-          id: Date.now().toString(),
-          title,
-          deadline,
-          progress: 0,
-          status: 'active',
-        };
-        set((state) => ({ projects: [...state.projects, newProject] }));
+      projects: [],
+      isLoadingProjects: false,
+      fetchProjects: async () => {
+        set({ isLoadingProjects: true });
+        try {
+          const projects = await api.getProjects();
+          set({ projects });
+        } catch (error) {
+          console.error('Failed to fetch projects:', error);
+        } finally {
+          set({ isLoadingProjects: false });
+        }
       },
-      updateProjectProgress: (id, progress) => {
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id === id ? { ...p, progress } : p
-          ),
-        }));
+      addProject: async (title, deadline) => {
+        try {
+          const newProject = await api.createProject(title, deadline);
+          set((state) => ({ projects: [...state.projects, newProject] }));
+        } catch (error) {
+          console.error('Failed to add project:', error);
+        }
       },
-      deleteProject: (id) => {
-        set((state) => ({
-          projects: state.projects.filter((p) => p.id !== id),
-        }));
+      updateProjectProgress: async (id, progress) => {
+        try {
+          await api.updateProject({ id, progress });
+          set((state) => ({
+            projects: state.projects.map((p) =>
+              p.id === id ? { ...p, progress } : p
+            ),
+          }));
+        } catch (error) {
+          console.error('Failed to update project progress:', error);
+        }
+      },
+      deleteProject: async (id) => {
+        try {
+          await api.deleteProject(id);
+          set((state) => ({
+            projects: state.projects.filter((p) => p.id !== id),
+          }));
+        } catch (error) {
+          console.error('Failed to delete project:', error);
+        }
       },
 
       // 日程事件
       events: [],
-      addEvent: (event) => {
-        const newEvent: CalendarEvent = {
-          ...event,
-          id: Date.now().toString(),
-        };
-        set((state) => ({ events: [...state.events, newEvent] }));
+      isLoadingEvents: false,
+      fetchEvents: async () => {
+        set({ isLoadingEvents: true });
+        try {
+          const events = await api.getEvents();
+          set({ events });
+        } catch (error) {
+          console.error('Failed to fetch events:', error);
+        } finally {
+          set({ isLoadingEvents: false });
+        }
       },
-      deleteEvent: (id) => {
-        set((state) => ({
-          events: state.events.filter((e) => e.id !== id),
-        }));
+      addEvent: async (event) => {
+        try {
+          const newEvent = await api.createEvent(
+            event.title,
+            event.date,
+            event.color,
+            event.note
+          );
+          set((state) => ({ events: [...state.events, newEvent] }));
+        } catch (error) {
+          console.error('Failed to add event:', error);
+        }
+      },
+      deleteEvent: async (id) => {
+        try {
+          await api.deleteEvent(id);
+          set((state) => ({
+            events: state.events.filter((e) => e.id !== id),
+          }));
+        } catch (error) {
+          console.error('Failed to delete event:', error);
+        }
       },
       getEventsByDate: (date) => {
         return get().events.filter((e) => e.date === date);
       },
 
       // 个人事务
-      personalTasks: [
-        { id: '1', title: '关于ai眼镜，ai耳机领域公司的投资建议', budget: 0 },
-      ],
-      addPersonalTask: (task) => {
-        const newTask: PersonalTask = {
-          ...task,
-          id: Date.now().toString(),
-        };
-        set((state) => ({ personalTasks: [...state.personalTasks, newTask] }));
+      personalTasks: [],
+      isLoadingPersonalTasks: false,
+      fetchPersonalTasks: async () => {
+        set({ isLoadingPersonalTasks: true });
+        try {
+          const tasks = await api.getPersonalTasks();
+          set({ personalTasks: tasks });
+        } catch (error) {
+          console.error('Failed to fetch personal tasks:', error);
+        } finally {
+          set({ isLoadingPersonalTasks: false });
+        }
       },
-      deletePersonalTask: (id) => {
-        set((state) => ({
-          personalTasks: state.personalTasks.filter((t) => t.id !== id),
-        }));
+      addPersonalTask: async (task) => {
+        try {
+          const newTask = await api.createPersonalTask(
+            task.title,
+            task.budget,
+            task.date,
+            task.location,
+            task.note
+          );
+          set((state) => ({ personalTasks: [...state.personalTasks, newTask] }));
+        } catch (error) {
+          console.error('Failed to add personal task:', error);
+        }
+      },
+      deletePersonalTask: async (id) => {
+        try {
+          await api.deletePersonalTask(id);
+          set((state) => ({
+            personalTasks: state.personalTasks.filter((t) => t.id !== id),
+          }));
+        } catch (error) {
+          console.error('Failed to delete personal task:', error);
+        }
       },
 
       // 热榜数据
@@ -268,9 +365,31 @@ export const useAppStore = create<AppState>()(
           scheduleEvents,
         };
       },
+
+      // 初始化数据
+      initializeData: async () => {
+        const state = get();
+        await Promise.all([
+          state.fetchTodos(),
+          state.fetchProjects(),
+          state.fetchEvents(),
+          state.fetchPersonalTasks(),
+        ]);
+      },
     }),
     {
       name: 'workbench-storage',
+      // 只持久化非数据库数据
+      partialize: (state) => ({
+        currentPage: state.currentPage,
+        hotList: state.hotList,
+        weather: state.weather,
+        currentMood: state.currentMood,
+        dailyChallenges: state.dailyChallenges,
+        wishlist: state.wishlist,
+        balance: state.balance,
+        backgroundImage: state.backgroundImage,
+      }),
     }
   )
 );

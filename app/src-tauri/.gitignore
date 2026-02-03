@@ -1,0 +1,32 @@
+# Rust
+target/
+Cargo.lock
+
+# Generated
+/gen/
+
+# Windows
+*.exe
+*.msi
+*.msix
+*.msixbundle
+
+# macOS
+*.app
+*.dmg
+
+# Linux
+*.AppImage
+*.deb
+*.rpm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
