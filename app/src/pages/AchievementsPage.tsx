@@ -23,6 +23,10 @@ export function AchievementsPage() {
   const completedTodos = todos.filter((t) => t.completed);
   const activeProjects = projects.filter((p) => p.status === 'active');
 
+  // Calculate wishlist totals
+  const totalWishlistAmount = wishlist.reduce((sum, item) => sum + item.amount, 0);
+  const remainingAmount = Math.max(0, totalWishlistAmount - balance);
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -231,13 +235,13 @@ export function AchievementsPage() {
                 <div className="flex justify-between text-sm">
                   <span className="text-white/50">总计需要</span>
                   <span className="text-yellow-400 font-medium">
-                    ¥{wishlist.reduce((sum, item) => sum + item.amount, 0)}
+                    ¥{totalWishlistAmount}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-white/50">还需存款</span>
                   <span className="text-yellow-400 font-medium">
-                    ¥{Math.max(0, wishlist.reduce((sum, item) => sum + item.amount, 0) - balance)}
+                    ¥{remainingAmount}
                   </span>
                 </div>
               </div>

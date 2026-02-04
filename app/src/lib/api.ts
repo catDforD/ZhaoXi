@@ -8,10 +8,10 @@ export async function getTodos(): Promise<Todo[]> {
 }
 
 export async function createTodo(title: string, priority: 'normal' | 'urgent'): Promise<Todo> {
-  return invoke('create_todo', { title, priority });
+  return invoke('create_todo', { request: { title, priority } });
 }
 
-export interface UpdateTodoRequest {
+export interface UpdateTodoRequest extends Record<string, unknown> {
   id: string;
   title?: string;
   completed?: boolean;
@@ -19,7 +19,7 @@ export interface UpdateTodoRequest {
 }
 
 export async function updateTodo(request: UpdateTodoRequest): Promise<Todo> {
-  return invoke('update_todo', request);
+  return invoke('update_todo', { request });
 }
 
 export async function deleteTodo(id: string): Promise<void> {
@@ -33,10 +33,10 @@ export async function getProjects(): Promise<Project[]> {
 }
 
 export async function createProject(title: string, deadline: string): Promise<Project> {
-  return invoke('create_project', { title, deadline });
+  return invoke('create_project', { request: { title, deadline } });
 }
 
-export interface UpdateProjectRequest {
+export interface UpdateProjectRequest extends Record<string, unknown> {
   id: string;
   title?: string;
   deadline?: string;
@@ -45,7 +45,7 @@ export interface UpdateProjectRequest {
 }
 
 export async function updateProject(request: UpdateProjectRequest): Promise<Project> {
-  return invoke('update_project', request);
+  return invoke('update_project', { request });
 }
 
 export async function deleteProject(id: string): Promise<void> {
@@ -68,10 +68,10 @@ export async function createEvent(
   color: string = 'blue',
   note?: string
 ): Promise<CalendarEvent> {
-  return invoke('create_event', { title, date, color, note });
+  return invoke('create_event', { request: { title, date, color, note } });
 }
 
-export interface UpdateEventRequest {
+export interface UpdateEventRequest extends Record<string, unknown> {
   id: string;
   title?: string;
   date?: string;
@@ -80,7 +80,7 @@ export interface UpdateEventRequest {
 }
 
 export async function updateEvent(request: UpdateEventRequest): Promise<CalendarEvent> {
-  return invoke('update_event', request);
+  return invoke('update_event', { request });
 }
 
 export async function deleteEvent(id: string): Promise<void> {
@@ -100,10 +100,10 @@ export async function createPersonalTask(
   location?: string,
   note?: string
 ): Promise<PersonalTask> {
-  return invoke('create_personal_task', { title, budget, date, location, note });
+  return invoke('create_personal_task', { request: { title, budget, date, location, note } });
 }
 
-export interface UpdatePersonalTaskRequest {
+export interface UpdatePersonalTaskRequest extends Record<string, unknown> {
   id: string;
   title?: string;
   budget?: number;
@@ -113,7 +113,7 @@ export interface UpdatePersonalTaskRequest {
 }
 
 export async function updatePersonalTask(request: UpdatePersonalTaskRequest): Promise<PersonalTask> {
-  return invoke('update_personal_task', request);
+  return invoke('update_personal_task', { request });
 }
 
 export async function deletePersonalTask(id: string): Promise<void> {

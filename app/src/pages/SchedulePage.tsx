@@ -7,7 +7,9 @@ import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 
-const colorOptions = [
+type ColorOption = { id: 'blue' | 'orange' | 'green' | 'teal' | 'red'; color: string; label: string };
+
+const colorOptions: ColorOption[] = [
   { id: 'blue', color: 'bg-blue-500', label: '蓝色' },
   { id: 'orange', color: 'bg-orange-500', label: '橙色' },
   { id: 'green', color: 'bg-green-500', label: '绿色' },
@@ -76,7 +78,7 @@ export function SchedulePage() {
                   {colorOptions.map((color) => (
                     <button
                       key={color.id}
-                      onClick={() => setNewEventColor(color.id as any)}
+                      onClick={() => setNewEventColor(color.id)}
                       className={cn(
                         'w-8 h-8 rounded-full transition-all',
                         color.color,

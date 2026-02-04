@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { User, Plus, Wallet, Calendar, MapPin, FileText } from 'lucide-react';
+import { User, Plus, Wallet, Calendar, MapPin, FileText, Trash2 } from 'lucide-react';
 import { GlassCard } from '@/components/layout/GlassCard';
 import { useAppStore } from '@/stores/appStore';
 
 export function PersonalPage() {
-  const { personalTasks, addPersonalTask, balance } = useAppStore();
+  const { personalTasks, addPersonalTask, deletePersonalTask, balance } = useAppStore();
   const [newTask, setNewTask] = useState({
     title: '',
     budget: '',
@@ -134,15 +134,33 @@ export function PersonalPage() {
           {personalTasks.map((task) => (
             <div
               key={task.id}
-              className="flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors"
+              className="group flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors"
             >
               <div className="w-2 h-2 rounded-full bg-yellow-400" />
-              <span className="flex-1 text-sm text-white">{task.title}</span>
+              <div className="flex-1">
+                <span className="text-sm text-white">{task.title}</span>
+                {(task.date || task.location) && (
+                  <div className="flex gap-2 mt-1">
+                    {task.date && (
+                      <span className="text-xs text-white/40">{task.date}</span>
+                    )}
+                    {task.location && (
+                      <span className="text-xs text-white/40">{task.location}</span>
+                    )}
+                  </div>
+                )}
+              </div>
               {task.budget !== undefined && task.budget > 0 && (
                 <span className="text-sm text-green-400">
                   ¥{task.budget}
                 </span>
               )}
+              <button
+                onClick={() => deletePersonalTask(task.id)}
+                className="opacity-0 group-hover:opacity-100 p-2 rounded-lg hover:bg-red-500/20 transition-all"
+              >
+                <Trash2 className="w-4 h-4 text-red-400" />
+              </button>
             </div>
           ))}
         </div>

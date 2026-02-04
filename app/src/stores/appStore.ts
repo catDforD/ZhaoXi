@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { toast } from 'sonner';
 import type {
   Todo,
   Project,
@@ -26,6 +27,7 @@ interface AppState {
   addTodo: (title: string, priority: 'normal' | 'urgent') => Promise<void>;
   toggleTodo: (id: string) => Promise<void>;
   deleteTodo: (id: string) => Promise<void>;
+  updateTodoTitle: (id: string, title: string) => Promise<void>;
 
   // 长期项目
   projects: Project[];
@@ -83,6 +85,10 @@ interface AppState {
 
   // 初始化数据
   initializeData: () => Promise<void>;
+
+  // 周打卡
+  weeklyCheckIns: boolean[];
+  toggleCheckIn: (index: number) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -139,6 +145,19 @@ export const useAppStore = create<AppState>()(
           }));
         } catch (error) {
           console.error('Failed to delete todo:', error);
+        }
+      },
+      updateTodoTitle: async (id, title) => {
+        try {
+          await api.updateTodo({ id, title });
+          set((state) => ({
+            todos: state.todos.map((t) =>
+              t.id === id ? { ...t, title } : t
+            ),
+          }));
+        } catch (error) {
+          console.error('Failed to update todo title:', error);
+          toast.error('更新待办事项失败');
         }
       },
 
@@ -210,8 +229,10 @@ export const useAppStore = create<AppState>()(
             event.note
           );
           set((state) => ({ events: [...state.events, newEvent] }));
+          toast.success('事件添加成功');
         } catch (error) {
           console.error('Failed to add event:', error);
+          toast.error('添加事件失败: ' + (error instanceof Error ? error.message : '未知错误'));
         }
       },
       deleteEvent: async (id) => {
@@ -252,8 +273,10 @@ export const useAppStore = create<AppState>()(
             task.note
           );
           set((state) => ({ personalTasks: [...state.personalTasks, newTask] }));
+          toast.success('事务添加成功');
         } catch (error) {
           console.error('Failed to add personal task:', error);
+          toast.error('添加事务失败: ' + (error instanceof Error ? error.message : '未知错误'));
         }
       },
       deletePersonalTask: async (id) => {
@@ -304,20 +327,39 @@ export const useAppStore = create<AppState>()(
         },
       ],
       toggleChallenge: (date, challengeId) => {
-        set((state) => ({
-          dailyChallenges: state.dailyChallenges.map((dc) =>
-            dc.date === date
-              ? {
-                  ...dc,
-                  items: dc.items.map((item) =>
-                    item.id === challengeId
-                      ? { ...item, completed: !item.completed }
-                      : item
-                  ),
-                }
-              : dc
-          ),
-        }));
+        set((state) => {
+          // Check if date exists, if not create it
+          const existingChallenge = state.dailyChallenges.find((dc) => dc.date === date);
+          if (!existingChallenge) {
+            return {
+              dailyChallenges: [
+                ...state.dailyChallenges,
+                {
+                  date,
+                  items: [
+                    { id: '1', title: '深呼吸练习', completed: challengeId === '1' },
+                    { id: '2', title: '23:00前入睡', completed: challengeId === '2' },
+                  ],
+                },
+              ],
+            };
+          }
+          // Update existing challenge
+          return {
+            dailyChallenges: state.dailyChallenges.map((dc) =>
+              dc.date === date
+                ? {
+                    ...dc,
+                    items: dc.items.map((item) =>
+                      item.id === challengeId
+                        ? { ...item, completed: !item.completed }
+                        : item
+                    ),
+                  }
+                : dc
+            ),
+          };
+        });
       },
 
       // 愿望清单
@@ -340,6 +382,16 @@ export const useAppStore = create<AppState>()(
       // 背景图片
       backgroundImage: null,
       setBackgroundImage: (url) => set({ backgroundImage: url }),
+
+      // 周打卡
+      weeklyCheckIns: [false, false, false, false, false, false, false],
+      toggleCheckIn: (index) => {
+        set((state) => {
+          const newCheckIns = [...state.weeklyCheckIns];
+          newCheckIns[index] = !newCheckIns[index];
+          return { weeklyCheckIns: newCheckIns };
+        });
+      },
 
       // 统计数据
       getStatistics: () => {
@@ -389,6 +441,7 @@ export const useAppStore = create<AppState>()(
         wishlist: state.wishlist,
         balance: state.balance,
         backgroundImage: state.backgroundImage,
+        weeklyCheckIns: state.weeklyCheckIns,
       }),
     }
   )

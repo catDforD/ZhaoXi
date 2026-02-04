@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Flame, Check } from 'lucide-react';
 import { GlassCard } from '@/components/layout/GlassCard';
 import { MoodSelector } from '@/components/features/MoodSelector';
@@ -11,12 +10,13 @@ import { cn } from '@/lib/utils';
 const weekDays = ['一', '二', '三', '四', '五', '六', '日'];
 
 export function JournalPage() {
-  const { dailyChallenges, toggleChallenge } = useAppStore();
+  const { dailyChallenges, toggleChallenge, weeklyCheckIns, toggleCheckIn } = useAppStore();
   const today = new Date();
   const todayStr = format(today, 'yyyy-MM-dd');
 
-  // Get today's challenges
-  const todayChallenges = dailyChallenges.find((dc) => dc.date === todayStr)?.items || [
+  // Get today's challenges from store, fallback to default if not found
+  const todayChallenge = dailyChallenges.find((dc) => dc.date === todayStr);
+  const todayChallenges = todayChallenge?.items || [
     { id: '1', title: '深呼吸练习', completed: false },
     { id: '2', title: '23:00前入睡', completed: false },
   ];
@@ -28,16 +28,7 @@ export function JournalPage() {
   const startDay = getDay(monthStart);
   const emptyDays = startDay === 0 ? 6 : startDay - 1;
 
-  // Weekly check-in
-  const [checkIns, setCheckIns] = useState<boolean[]>([false, false, false, false, false, false, false]);
-
-  const toggleCheckIn = (index: number) => {
-    setCheckIns((prev) => {
-      const newCheckIns = [...prev];
-      newCheckIns[index] = !newCheckIns[index];
-      return newCheckIns;
-    });
-  };
+  // Weekly check-in is now managed by store
 
   return (
     <div className="p-6">
@@ -169,12 +160,12 @@ export function JournalPage() {
                   onClick={() => toggleCheckIn(index)}
                   className={cn(
                     'aspect-square rounded-xl flex items-center justify-center transition-all',
-                    checkIns[index]
+                    weeklyCheckIns[index]
                       ? 'bg-green-500/30 border border-green-500/50'
                       : 'bg-white/5 hover:bg-white/10'
                   )}
                 >
-                  {checkIns[index] && <Check className="w-4 h-4 text-green-400" />}
+                  {weeklyCheckIns[index] && <Check className="w-4 h-4 text-green-400" />}
                 </button>
               ))}
             </div>

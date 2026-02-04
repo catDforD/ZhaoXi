@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/appStore';
 import { cn } from '@/lib/utils';
 
 export function TodoPage() {
-  const { todos, addTodo, toggleTodo, deleteTodo } = useAppStore();
+  const { todos, addTodo, toggleTodo, deleteTodo, updateTodoTitle } = useAppStore();
   const [newTodo, setNewTodo] = useState('');
   const [priority, setPriority] = useState<'normal' | 'urgent'>('normal');
 
@@ -95,7 +95,7 @@ export function TodoPage() {
                 key={todo.id}
                 className="group flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors"
               >
-                <TodoItem todo={todo} onToggle={() => toggleTodo(todo.id)} />
+                <TodoItem todo={todo} onToggle={() => toggleTodo(todo.id)} onEdit={(title) => updateTodoTitle(todo.id, title)} />
                 <button
                   onClick={() => deleteTodo(todo.id)}
                   className="opacity-0 group-hover:opacity-100 p-2 rounded-lg hover:bg-red-500/20 transition-all"
