@@ -15,10 +15,20 @@ import type {
 } from '@/types';
 import * as api from '@/lib/api';
 
+export type PageKey =
+  | 'dashboard'
+  | 'todos'
+  | 'projects'
+  | 'personal'
+  | 'schedule'
+  | 'journal'
+  | 'achievements'
+  | 'apps';
+
 interface AppState {
   // 当前页面
-  currentPage: string;
-  setCurrentPage: (page: string) => void;
+  currentPage: PageKey;
+  setCurrentPage: (page: PageKey) => void;
 
   // 待办事项
   todos: Todo[];
@@ -124,13 +134,13 @@ export const useAppStore = create<AppState>()(
         const todo = get().todos.find((t) => t.id === id);
         if (!todo) return;
         try {
-          await api.updateTodo({
+          const updatedTodo = await api.updateTodo({
             id,
             completed: !todo.completed,
           });
           set((state) => ({
             todos: state.todos.map((t) =>
-              t.id === id ? { ...t, completed: !t.completed } : t
+              t.id === id ? updatedTodo : t
             ),
           }));
         } catch (error) {
@@ -149,10 +159,10 @@ export const useAppStore = create<AppState>()(
       },
       updateTodoTitle: async (id, title) => {
         try {
-          await api.updateTodo({ id, title });
+          const updatedTodo = await api.updateTodo({ id, title });
           set((state) => ({
             todos: state.todos.map((t) =>
-              t.id === id ? { ...t, title } : t
+              t.id === id ? updatedTodo : t
             ),
           }));
         } catch (error) {
@@ -185,10 +195,10 @@ export const useAppStore = create<AppState>()(
       },
       updateProjectProgress: async (id, progress) => {
         try {
-          await api.updateProject({ id, progress });
+          const updatedProject = await api.updateProject({ id, progress });
           set((state) => ({
             projects: state.projects.map((p) =>
-              p.id === id ? { ...p, progress } : p
+              p.id === id ? updatedProject : p
             ),
           }));
         } catch (error) {

@@ -4,9 +4,19 @@ import { GlassCard } from '@/components/layout/GlassCard';
 import { TodoItem } from '@/components/features/TodoItem';
 import { useAppStore } from '@/stores/appStore';
 import { cn } from '@/lib/utils';
+import { shallow } from 'zustand/shallow';
 
 export function TodoPage() {
-  const { todos, addTodo, toggleTodo, deleteTodo, updateTodoTitle } = useAppStore();
+  const { todos, addTodo, toggleTodo, deleteTodo, updateTodoTitle } = useAppStore(
+    (state) => ({
+      todos: state.todos,
+      addTodo: state.addTodo,
+      toggleTodo: state.toggleTodo,
+      deleteTodo: state.deleteTodo,
+      updateTodoTitle: state.updateTodoTitle,
+    }),
+    shallow
+  );
   const [newTodo, setNewTodo] = useState('');
   const [priority, setPriority] = useState<'normal' | 'urgent'>('normal');
 

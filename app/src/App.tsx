@@ -8,7 +8,7 @@ import { SchedulePage } from '@/pages/SchedulePage';
 import { JournalPage } from '@/pages/JournalPage';
 import { AchievementsPage } from '@/pages/AchievementsPage';
 import { AppsPage } from '@/pages/AppsPage';
-import { useAppStore } from '@/stores/appStore';
+import { useAppStore, type PageKey } from '@/stores/appStore';
 import { AnimatePresence, motion } from 'framer-motion';
 
 function App() {
@@ -19,27 +19,15 @@ function App() {
     initializeData();
   }, [initializeData]);
 
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'dashboard':
-        return <Dashboard />;
-      case 'todos':
-        return <TodoPage />;
-      case 'projects':
-        return <ProjectsPage />;
-      case 'personal':
-        return <PersonalPage />;
-      case 'schedule':
-        return <SchedulePage />;
-      case 'journal':
-        return <JournalPage />;
-      case 'achievements':
-        return <AchievementsPage />;
-      case 'apps':
-        return <AppsPage />;
-      default:
-        return <Dashboard />;
-    }
+  const pages: Record<PageKey, JSX.Element> = {
+    dashboard: <Dashboard />,
+    todos: <TodoPage />,
+    projects: <ProjectsPage />,
+    personal: <PersonalPage />,
+    schedule: <SchedulePage />,
+    journal: <JournalPage />,
+    achievements: <AchievementsPage />,
+    apps: <AppsPage />,
   };
 
   return (
@@ -75,7 +63,7 @@ function App() {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
           >
-            {renderPage()}
+            {pages[currentPage]}
           </motion.div>
         </AnimatePresence>
       </main>
