@@ -8,6 +8,7 @@ import { SchedulePage } from '@/pages/SchedulePage';
 import { JournalPage } from '@/pages/JournalPage';
 import { AchievementsPage } from '@/pages/AchievementsPage';
 import { AppsPage } from '@/pages/AppsPage';
+import { AppContainer } from '@/pages/AppContainer';
 import { useAppStore } from '@/stores/appStore';
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -20,6 +21,12 @@ function App() {
   }, [initializeData]);
 
   const renderPage = () => {
+    // 检查是否是用户应用（以 "app:" 前缀标识）
+    if (currentPage.startsWith('app:')) {
+      const appId = currentPage.slice(4);
+      return <AppContainer appId={appId} />;
+    }
+
     switch (currentPage) {
       case 'dashboard':
         return <Dashboard />;
@@ -74,6 +81,7 @@ function App() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+            className="h-full"
           >
             {renderPage()}
           </motion.div>

@@ -54,12 +54,6 @@ export interface WeatherData {
 // 心情类型
 export type MoodType = 'happy' | 'calm' | 'tired' | 'excited' | 'sad' | 'numb';
 
-export interface Mood {
-  type: MoodType;
-  emoji: string;
-  label: string;
-}
-
 // 挑战项
 export interface Challenge {
   id: string;
@@ -71,12 +65,6 @@ export interface Challenge {
 export interface DailyChallenge {
   date: string;
   items: Challenge[];
-}
-
-// 打卡记录
-export interface CheckInRecord {
-  day: string;
-  checked: boolean;
 }
 
 // 愿望清单项
@@ -94,10 +82,21 @@ export interface Statistics {
   scheduleEvents: number;
 }
 
-// 导航项
-export interface NavItem {
-  id: string;
-  label: string;
-  icon: string;
-  path: string;
+// 用户自定义应用
+export interface UserApp {
+  id: string;                    // 唯一标识 (如 "notion-001")
+  name: string;                  // 应用名称
+  description: string;           // 应用描述
+  icon: string;                  // Lucide 图标名称
+  color: string;                 // 主题颜色类名
+  type: 'web' | 'local';         // 应用类型
+  url?: string;                  // Web 应用 URL
+  localPath?: string;            // 本地应用路径（相对于插件目录）
+  createdAt: string;             // 创建时间
+}
+
+// 应用运行实例状态
+export interface RunningApp {
+  appId: string;
+  startTime: number;
 }

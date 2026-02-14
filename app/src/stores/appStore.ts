@@ -12,6 +12,8 @@ import type {
   DailyChallenge,
   WishlistItem,
   Statistics,
+  UserApp,
+  RunningApp,
 } from '@/types';
 import * as api from '@/lib/api';
 
@@ -89,6 +91,16 @@ interface AppState {
   // 周打卡
   weeklyCheckIns: boolean[];
   toggleCheckIn: (index: number) => void;
+
+  // 用户自定义应用
+  userApps: UserApp[];
+  runningApps: RunningApp[];
+  activeAppId: string | null;
+  addUserApp: (app: Omit<UserApp, 'id' | 'createdAt'>) => void;
+  removeUserApp: (id: string) => void;
+  launchUserApp: (id: string) => void;
+  closeUserApp: (id: string) => void;
+  updateUserApp: (id: string, updates: Partial<UserApp>) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -393,6 +405,60 @@ export const useAppStore = create<AppState>()(
         });
       },
 
+      // 用户自定义应用
+      userApps: [],
+      runningApps: [],
+      activeAppId: null,
+      addUserApp: (app) => {
+        const newApp: UserApp = {
+          ...app,
+          id: `${app.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString(36)}`,
+          createdAt: new Date().toISOString(),
+        };
+        set((state) => ({
+          userApps: [...state.userApps, newApp],
+        }));
+        toast.success(`应用 "${app.name}" 添加成功`);
+      },
+      removeUserApp: (id) => {
+        set((state) => ({
+          userApps: state.userApps.filter((a) => a.id !== id),
+          runningApps: state.runningApps.filter((r) => r.appId !== id),
+          activeAppId: state.activeAppId === id ? null : state.activeAppId,
+        }));
+        toast.success('应用已删除');
+      },
+      launchUserApp: (id) => {
+        const app = get().userApps.find((a) => a.id === id);
+        if (!app) {
+          toast.error('应用不存在');
+          return;
+        }
+        set((state) => {
+          const isRunning = state.runningApps.some((r) => r.appId === id);
+          return {
+            runningApps: isRunning
+              ? state.runningApps
+              : [...state.runningApps, { appId: id, startTime: Date.now() }],
+            activeAppId: id,
+          };
+        });
+      },
+      closeUserApp: (id) => {
+        set((state) => ({
+          runningApps: state.runningApps.filter((r) => r.appId !== id),
+          activeAppId: state.activeAppId === id ? null : state.activeAppId,
+        }));
+      },
+      updateUserApp: (id, updates) => {
+        set((state) => ({
+          userApps: state.userApps.map((a) =>
+            a.id === id ? { ...a, ...updates } : a
+          ),
+        }));
+        toast.success('应用信息已更新');
+      },
+
       // 统计数据
       getStatistics: () => {
         const state = get();
@@ -442,6 +508,7 @@ export const useAppStore = create<AppState>()(
         balance: state.balance,
         backgroundImage: state.backgroundImage,
         weeklyCheckIns: state.weeklyCheckIns,
+        userApps: state.userApps,
       }),
     }
   )

@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>番茄钟</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            overflow: auto;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            color: #fff;
+            padding: 1rem 0;
+        }
+
+        .container {
+            text-align: center;
+            padding: 2rem 1rem;
+            max-width: 400px;
+            width: 100%;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #e94560, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: rgba(255,255,255,0.5);
+            font-size: 0.9rem;
+            margin-bottom: 2rem;
+        }
+
+        .timer-container {
+            position: relative;
+            width: 250px;
+            height: 250px;
+            margin: 0 auto 2rem;
+        }
+
+        .progress-ring {
+            transform: rotate(-90deg);
+        }
+
+        .progress-ring-bg {
+            fill: none;
+            stroke: rgba(255,255,255,0.1);
+            stroke-width: 8;
+        }
+
+        .progress-ring-fill {
+            fill: none;
+            stroke: url(#gradient);
+            stroke-width: 8;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s linear;
+        }
+
+        .timer-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 3.5rem;
+            font-weight: 300;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 2px;
+        }
+
+        .timer-display .seconds {
+            font-size: 2rem;
+            color: rgba(255,255,255,0.6);
+        }
+
+        .status {
+            font-size: 1.1rem;
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 2rem;
+            min-height: 1.5rem;
+        }
+
+        .status.working {
+            color: #e94560;
+        }
+
+        .status.resting {
+            color: #4ecca3;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin-bottom: 2rem;
+        }
+
+        button {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            padding: 0.8rem 2rem;
+            border-radius: 50px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        button:hover {
+            background: rgba(255,255,255,0.2);
+            transform: translateY(-2px);
+        }
+
+        button.primary {
+            background: linear-gradient(135deg, #e94560, #ff6b6b);
+            border: none;
+            box-shadow: 0 4px 15px rgba(233, 69, 96, 0.4);
+        }
+
+        button.primary:hover {
+            box-shadow: 0 6px 20px rgba(233, 69, 96, 0.5);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .settings {
+            display: flex;
+            gap: 2rem;
+            justify-content: center;
+            margin-bottom: 2rem;
+        }
+
+        .setting-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .setting-group label {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.5);
+        }
+
+        .setting-group input {
+            width: 60px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            padding: 0.5rem;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 1rem;
+        }
+
+        .stats {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .stats-title {
+            font-size: 0.9rem;
+            color: rgba(255,255,255,0.5);
+            margin-bottom: 1rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #e94560;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.4);
+            margin-top: 0.25rem;
+        }
+
+        .tomatoes {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+            max-width: 200px;
+        }
+
+        .tomato {
+            font-size: 1.5rem;
+            animation: pop 0.3s ease;
+        }
+
+        @keyframes pop {
+            0% { transform: scale(0); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+
+        .sound-toggle {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(255,255,255,0.1);
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            padding: 0;
+        }
+
+        /* SVG Gradient */
+        .gradient-defs {
+            position: absolute;
+            width: 0;
+            height: 0;
+        }
+    </style>
+</head>
+<body>
+    <svg class="gradient-defs">
+        <defs>
+            <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" style="stop-color:#e94560"/>
+                <stop offset="100%" style="stop-color:#ff6b6b"/>
+            </linearGradient>
+        </defs>
+    </svg>
+
+    <button class="sound-toggle" id="soundToggle" title="切换声音">🔔</button>
+
+    <div class="container">
+        <h1>🍅 番茄钟</h1>
+        <p class="subtitle">专注工作，高效休息</p>
+
+        <div class="timer-container">
+            <svg class="progress-ring" width="250" height="250">
+                <circle class="progress-ring-bg" cx="125" cy="125" r="110"/>
+                <circle class="progress-ring-fill" cx="125" cy="125" r="110"
+                    stroke-dasharray="691"
+                    stroke-dashoffset="0"/>
+            </svg>
+            <div class="timer-display">
+                <span id="minutes">25</span><span class="seconds">:<span id="seconds">00</span></span>
+            </div>
+        </div>
+
+        <div class="status" id="status">准备开始专注</div>
+
+        <div class="controls">
+            <button id="startBtn" class="primary">开始</button>
+            <button id="pauseBtn" style="display:none;">暂停</button>
+            <button id="resetBtn">重置</button>
+        </div>
+
+        <div class="settings">
+            <div class="setting-group">
+                <label>专注时长</label>
+                <input type="number" id="workTime" value="25" min="1" max="60">
+            </div>
+            <div class="setting-group">
+                <label>休息时长</label>
+                <input type="number" id="breakTime" value="5" min="1" max="30">
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stats-title">今日统计</div>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="completedCount">0</div>
+                    <div class="stat-label">完成番茄</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="focusMinutes">0</div>
+                    <div class="stat-label">专注分钟</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="totalSessions">0</div>
+                    <div class="stat-label">总次数</div>
+                </div>
+            </div>
+            <div class="tomatoes" id="tomatoes"></div>
+        </div>
+    </div>
+
+    <script>
+        // 状态管理
+        let timeLeft = 25 * 60;
+        let totalTime = 25 * 60;
+        let isRunning = false;
+        let isWorkMode = true;
+        let timer = null;
+        let soundEnabled = true;
+
+        // 统计数据
+        let stats = {
+            completed: 0,
+            focusMinutes: 0,
+            totalSessions: 0,
+            tomatoes: []
+        };
+
+        // DOM 元素
+        const minutesEl = document.getElementById('minutes');
+        const secondsEl = document.getElementById('seconds');
+        const statusEl = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const workTimeInput = document.getElementById('workTime');
+        const breakTimeInput = document.getElementById('breakTime');
+        const progressRing = document.querySelector('.progress-ring-fill');
+        const soundToggle = document.getElementById('soundToggle');
+
+        // 音频上下文（用于播放提示音）
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        // 播放提示音
+        function playSound(frequency = 800, duration = 0.3) {
+            if (!soundEnabled) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.frequency.value = frequency;
+            oscillator.type = 'sine';
+
+            gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + duration);
+        }
+
+        // 播放完成音效
+        function playCompleteSound() {
+            if (!soundEnabled) return;
+
+            [523, 659, 784, 1047].forEach((freq, i) => {
+                setTimeout(() => playSound(freq, 0.4), i * 150);
+            });
+        }
+
+        // 更新显示
+        function updateDisplay() {
+            const m = Math.floor(timeLeft / 60);
+            const s = timeLeft % 60;
+            minutesEl.textContent = m.toString().padStart(2, '0');
+            secondsEl.textContent = s.toString().padStart(2, '0');
+
+            // 更新进度环
+            const circumference = 2 * Math.PI * 110;
+            const progress = (totalTime - timeLeft) / totalTime;
+            const offset = circumference * progress;
+            progressRing.style.strokeDashoffset = offset;
+
+            // 更新标题
+            document.title = `${m}:${s.toString().padStart(2, '0')} - ${isWorkMode ? '专注中' : '休息中'}`;
+        }
+
+        // 更新状态
+        function updateStatus() {
+            if (isRunning) {
+                statusEl.textContent = isWorkMode ? '🎯 专注工作中...' : '☕ 休息时间~';
+                statusEl.className = 'status ' + (isWorkMode ? 'working' : 'resting');
+            } else {
+                statusEl.textContent = isWorkMode ? '准备开始专注' : '准备开始休息';
+                statusEl.className = 'status';
+            }
+        }
+
+        // 切换模式
+        function switchMode() {
+            isWorkMode = !isWorkMode;
+            const minutes = isWorkMode ? parseInt(workTimeInput.value) : parseInt(breakTimeInput.value);
+            totalTime = minutes * 60;
+            timeLeft = totalTime;
+            updateDisplay();
+            updateStatus();
+        }
+
+        // 完成一个番茄
+        function completePomodoro() {
+            playCompleteSound();
+
+            if (isWorkMode) {
+                stats.completed++;
+                stats.focusMinutes += parseInt(workTimeInput.value);
+                stats.tomatoes.push('🍅');
+                updateStats();
+
+                // 显示完成提示
+                statusEl.textContent = '✅ 专注完成！休息一下吧';
+                addTomato();
+            } else {
+                statusEl.textContent = '✨ 休息结束！准备下一轮';
+            }
+
+            stats.totalSessions++;
+            updateStats();
+
+            setTimeout(() => {
+                switchMode();
+                if (!isWorkMode) {
+                    // 自动开始休息
+                    startTimer();
+                }
+            }, 2000);
+        }
+
+        // 添加番茄图标
+        function addTomato() {
+            const container = document.getElementById('tomatoes');
+            const tomato = document.createElement('span');
+            tomato.className = 'tomato';
+            tomato.textContent = '🍅';
+            container.appendChild(tomato);
+        }
+
+        // 更新统计
+        function updateStats() {
+            document.getElementById('completedCount').textContent = stats.completed;
+            document.getElementById('focusMinutes').textContent = stats.focusMinutes;
+            document.getElementById('totalSessions').textContent = stats.totalSessions;
+
+            // 保存到本地存储
+            localStorage.setItem('pomodoroStats', JSON.stringify(stats));
+        }
+
+        // 加载统计
+        function loadStats() {
+            const saved = localStorage.getItem('pomodoroStats');
+            if (saved) {
+                stats = JSON.parse(saved);
+                document.getElementById('completedCount').textContent = stats.completed;
+                document.getElementById('focusMinutes').textContent = stats.focusMinutes;
+                document.getElementById('totalSessions').textContent = stats.totalSessions;
+
+                // 恢复番茄图标
+                const container = document.getElementById('tomatoes');
+                container.innerHTML = '';
+                stats.tomatoes.forEach(() => {
+                    const tomato = document.createElement('span');
+                    tomato.className = 'tomato';
+                    tomato.textContent = '🍅';
+                    container.appendChild(tomato);
+                });
+            }
+        }
+
+        // 开始计时
+        function startTimer() {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            isRunning = true;
+            startBtn.style.display = 'none';
+            pauseBtn.style.display = 'inline-block';
+            pauseBtn.textContent = '暂停';
+            updateStatus();
+            playSound(600, 0.1);
+
+            timer = setInterval(() => {
+                if (timeLeft > 0) {
+                    timeLeft--;
+                    updateDisplay();
+                } else {
+                    clearInterval(timer);
+                    isRunning = false;
+                    completePomodoro();
+                }
+            }, 1000);
+        }
+
+        // 暂停计时
+        function pauseTimer() {
+            clearInterval(timer);
+            isRunning = false;
+            pauseBtn.textContent = '继续';
+            statusEl.textContent = '⏸️ 已暂停';
+            statusEl.className = 'status';
+        }
+
+        // 继续计时
+        function resumeTimer() {
+            startTimer();
+        }
+
+        // 重置计时
+        function resetTimer() {
+            clearInterval(timer);
+            isRunning = false;
+            const minutes = isWorkMode ? parseInt(workTimeInput.value) : parseInt(breakTimeInput.value);
+            totalTime = minutes * 60;
+            timeLeft = totalTime;
+            startBtn.style.display = 'inline-block';
+            pauseBtn.style.display = 'none';
+            updateDisplay();
+            updateStatus();
+        }
+
+        // 事件监听
+        startBtn.addEventListener('click', startTimer);
+
+        pauseBtn.addEventListener('click', () => {
+            if (isRunning) {
+                pauseTimer();
+            } else {
+                resumeTimer();
+            }
+        });
+
+        resetBtn.addEventListener('click', resetTimer);
+
+        workTimeInput.addEventListener('change', () => {
+            if (!isRunning && isWorkMode) {
+                totalTime = parseInt(workTimeInput.value) * 60;
+                timeLeft = totalTime;
+                updateDisplay();
+            }
+        });
+
+        breakTimeInput.addEventListener('change', () => {
+            if (!isRunning && !isWorkMode) {
+                totalTime = parseInt(breakTimeInput.value) * 60;
+                timeLeft = totalTime;
+                updateDisplay();
+            }
+        });
+
+        soundToggle.addEventListener('click', () => {
+            soundEnabled = !soundEnabled;
+            soundToggle.textContent = soundEnabled ? '🔔' : '🔕';
+            playSound(400, 0.1);
+        });
+
+        // 初始化
+        loadStats();
+        updateDisplay();
+        updateStatus();
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (isRunning) {
+                    pauseTimer();
+                } else {
+                    startTimer();
+                }
+            } else if (e.code === 'KeyR') {
+                resetTimer();
+            }
+        });
+
+        // 每日重置
+        const today = new Date().toDateString();
+        const lastDate = localStorage.getItem('pomodoroLastDate');
+        if (lastDate !== today) {
+            stats = { completed: 0, focusMinutes: 0, totalSessions: 0, tomatoes: [] };
+            localStorage.setItem('pomodoroLastDate', today);
+            updateStats();
+        }
+    </script>
+</body>
+</html>
