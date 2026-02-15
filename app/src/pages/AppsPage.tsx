@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { Grid3X3, Calculator, Notebook, Image, Music, Film, BookOpen, Gamepad2, MessageCircle, Mail, Camera, Map, Plus, ExternalLink, Trash2, MoreVertical, Globe } from 'lucide-react';
+import { Grid3X3, Calculator, Notebook, Image, Music, Film, BookOpen, Gamepad2, MessageCircle, Mail, Camera, Map, Plus, ExternalLink, Trash2, MoreVertical, Globe, Pin, PinOff, LayoutTemplate, Settings2 } from 'lucide-react';
 import { GlassCard } from '@/components/layout/GlassCard';
 import { Button } from '@/components/ui/button';
 import { useAppStore } from '@/stores/appStore';
 import { DynamicIcon } from '@/components/features/DynamicIcon';
 import { AddAppDialog } from '@/components/features/AddAppDialog';
+import { SidebarSettingsDialog } from '@/components/features/SidebarSettingsDialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { UserApp } from '@/types';
 
@@ -37,8 +39,17 @@ const builtInApps: BuiltInAppItem[] = [
 ];
 
 export function AppsPage() {
-  const { userApps, setCurrentPage, launchUserApp, removeUserApp } = useAppStore();
+  const {
+    userApps,
+    sidebarItems,
+    setCurrentPage,
+    launchUserApp,
+    removeUserApp,
+    addSidebarItem,
+    removeSidebarItem,
+  } = useAppStore();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isSidebarSettingsOpen, setIsSidebarSettingsOpen] = useState(false);
 
   const handleBuiltInAppClick = (appName: string) => {
     toast.info(`"${appName}" 功能即将上线，敬请期待！`);
@@ -56,6 +67,23 @@ export function AppsPage() {
     }
   };
 
+  // 检查应用是否已固定到侧边栏
+  const isPinnedToSidebar = (appId: string) => {
+    return sidebarItems.some((item) => item.id === appId && item.enabled);
+  };
+
+  // 处理固定/取消固定
+  const handleTogglePin = (app: UserApp, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isPinnedToSidebar(app.id)) {
+      removeSidebarItem(app.id);
+      toast.success(`"${app.name}" 已从侧边栏移除`);
+    } else {
+      addSidebarItem(app.id, 'app');
+      toast.success(`"${app.name}" 已固定到侧边栏`);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -69,14 +97,39 @@ export function AppsPage() {
             <p className="text-sm text-white/50">管理和启动你的应用</p>
           </div>
         </div>
-        <Button
-          onClick={() => setIsAddDialogOpen(true)}
-          className="bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          添加应用
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setIsSidebarSettingsOpen(true)}
+            className="bg-white/5 border-white/10 text-white hover:bg-white/10"
+          >
+            <Settings2 className="w-4 h-4 mr-2" />
+            侧边栏设置
+          </Button>
+          <Button
+            onClick={() => setIsAddDialogOpen(true)}
+            className="bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            添加应用
+          </Button>
+        </div>
       </div>
+
+      {/* 侧边栏配置卡片 */}
+      <GlassCard className="p-4 bg-gradient-to-r from-purple-500/10 to-blue-500/10 border-purple-500/20">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+            <LayoutTemplate className="w-5 h-5 text-purple-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-medium text-white">自定义侧边栏</h3>
+            <p className="text-xs text-white/50">
+              已固定 {sidebarItems.filter(i => i.type === 'app' && i.enabled).length} 个应用，点击右上角"侧边栏设置"进行管理
+            </p>
+          </div>
+        </div>
+      </GlassCard>
 
       {/* 内置应用区域 */}
       <div className="space-y-3">
@@ -137,10 +190,22 @@ export function AppsPage() {
             {userApps.map((app) => (
               <GlassCard
                 key={app.id}
-                className="p-5 cursor-pointer group relative border-purple-500/20"
+                className={cn(
+                  "p-5 cursor-pointer group relative",
+                  isPinnedToSidebar(app.id) && "border-purple-500/40"
+                )}
                 hover
                 onClick={() => handleUserAppClick(app)}
               >
+                {/* 固定指示器 */}
+                {isPinnedToSidebar(app.id) && (
+                  <div className="absolute top-2 left-2">
+                    <div className="w-5 h-5 rounded-full bg-purple-500/20 flex items-center justify-center">
+                      <Pin className="w-3 h-3 text-purple-400" />
+                    </div>
+                  </div>
+                )}
+
                 {/* 操作菜单 */}
                 <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <DropdownMenu>
@@ -164,6 +229,27 @@ export function AppsPage() {
                       >
                         <ExternalLink className="w-4 h-4 mr-2" />
                         启动应用
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className={cn(
+                          "cursor-pointer",
+                          isPinnedToSidebar(app.id)
+                            ? "text-yellow-400 hover:text-yellow-300 focus:text-yellow-300 hover:bg-yellow-500/20"
+                            : "text-white/80 hover:text-white focus:text-white hover:bg-white/10"
+                        )}
+                        onClick={(e) => handleTogglePin(app, e)}
+                      >
+                        {isPinnedToSidebar(app.id) ? (
+                          <>
+                            <PinOff className="w-4 h-4 mr-2" />
+                            取消固定
+                          </>
+                        ) : (
+                          <>
+                            <Pin className="w-4 h-4 mr-2" />
+                            固定到侧边栏
+                          </>
+                        )}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         className="text-red-400 hover:text-red-300 focus:text-red-300 hover:bg-red-500/20 cursor-pointer"
@@ -191,6 +277,12 @@ export function AppsPage() {
                     ) : (
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/20 text-green-400">
                         本地
+                      </span>
+                    )}
+                    {isPinnedToSidebar(app.id) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-400 flex items-center gap-0.5">
+                        <Pin className="w-3 h-3" />
+                        已固定
                       </span>
                     )}
                   </div>
@@ -225,12 +317,19 @@ export function AppsPage() {
           <li>点击"添加应用"添加你喜欢的 Web 应用（如 Notion、GitHub、Figma 等）</li>
           <li>添加的应用会在工作台内部打开，无需切换窗口</li>
           <li>右键点击应用卡片或点击菜单按钮可进行删除操作</li>
+          <li>使用"固定到侧边栏"功能将常用应用添加到侧边栏快速访问</li>
           <li>应用数据保存在本地，重启后仍然保留</li>
         </ul>
       </GlassCard>
 
       {/* 添加应用对话框 */}
       <AddAppDialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen} />
+
+      {/* 侧边栏设置对话框 */}
+      <SidebarSettingsDialog
+        open={isSidebarSettingsOpen}
+        onOpenChange={setIsSidebarSettingsOpen}
+      />
     </div>
   );
 }

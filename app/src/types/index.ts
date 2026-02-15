@@ -100,3 +100,18 @@ export interface RunningApp {
   appId: string;
   startTime: number;
 }
+
+// 侧边栏项目类型
+export interface SidebarItem {
+  id: string;           // 唯一标识（内置页面用原ID，用户应用用 appId）
+  type: 'builtin' | 'app';  // 类型：内置页面 或 用户应用
+  enabled: boolean;     // 是否启用（显示在侧边栏）
+  order: number;        // 排序顺序
+}
+
+// 内置页面定义
+export interface BuiltinPage {
+  id: string;
+  label: string;
+  icon: string;  // Lucide 图标名称
+}

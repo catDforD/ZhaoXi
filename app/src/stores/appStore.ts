@@ -14,6 +14,7 @@ import type {
   Statistics,
   UserApp,
   RunningApp,
+  SidebarItem,
 } from '@/types';
 import * as api from '@/lib/api';
 
@@ -101,6 +102,13 @@ interface AppState {
   launchUserApp: (id: string) => void;
   closeUserApp: (id: string) => void;
   updateUserApp: (id: string, updates: Partial<UserApp>) => void;
+
+  // 侧边栏配置
+  sidebarItems: SidebarItem[];
+  addSidebarItem: (id: string, type: 'builtin' | 'app') => void;
+  removeSidebarItem: (id: string) => void;
+  toggleSidebarItem: (id: string) => void;
+  reorderSidebarItems: (items: SidebarItem[]) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -493,6 +501,74 @@ export const useAppStore = create<AppState>()(
           state.fetchEvents(),
           state.fetchPersonalTasks(),
         ]);
+
+        // 初始化侧边栏配置（如果还没有）
+        // 注意：需要在异步操作后重新获取状态，因为 persist 中间件可能已经恢复了状态
+        const currentState = get();
+        if (currentState.sidebarItems.length === 0) {
+          const defaultItems: SidebarItem[] = [
+            { id: 'dashboard', type: 'builtin', enabled: true, order: 0 },
+            { id: 'todos', type: 'builtin', enabled: true, order: 1 },
+            { id: 'projects', type: 'builtin', enabled: true, order: 2 },
+            { id: 'personal', type: 'builtin', enabled: true, order: 3 },
+            { id: 'schedule', type: 'builtin', enabled: true, order: 4 },
+            { id: 'journal', type: 'builtin', enabled: true, order: 5 },
+            { id: 'achievements', type: 'builtin', enabled: true, order: 6 },
+            { id: 'apps', type: 'builtin', enabled: true, order: 7 },
+          ];
+          set({ sidebarItems: defaultItems });
+        }
+      },
+
+      // 侧边栏配置
+      sidebarItems: [],
+      addSidebarItem: (id, type) => {
+        const state = get();
+        const exists = state.sidebarItems.some((item) => item.id === id);
+        if (exists) {
+          // 如果已存在，启用它
+          set({
+            sidebarItems: state.sidebarItems.map((item) =>
+              item.id === id ? { ...item, enabled: true } : item
+            ),
+          });
+        } else {
+          // 添加新项目
+          const newItem: SidebarItem = {
+            id,
+            type,
+            enabled: true,
+            order: state.sidebarItems.length,
+          };
+          set({ sidebarItems: [...state.sidebarItems, newItem] });
+        }
+      },
+      removeSidebarItem: (id) => {
+        const state = get();
+        const item = state.sidebarItems.find((i) => i.id === id);
+        if (item?.type === 'builtin') {
+          // 内置页面只禁用，不删除
+          set({
+            sidebarItems: state.sidebarItems.map((i) =>
+              i.id === id ? { ...i, enabled: false } : i
+            ),
+          });
+        } else {
+          // 用户应用直接删除
+          set({
+            sidebarItems: state.sidebarItems.filter((i) => i.id !== id),
+          });
+        }
+      },
+      toggleSidebarItem: (id) => {
+        set((state) => ({
+          sidebarItems: state.sidebarItems.map((item) =>
+            item.id === id ? { ...item, enabled: !item.enabled } : item
+          ),
+        }));
+      },
+      reorderSidebarItems: (items) => {
+        set({ sidebarItems: items });
       },
     }),
     {
@@ -509,7 +585,26 @@ export const useAppStore = create<AppState>()(
         backgroundImage: state.backgroundImage,
         weeklyCheckIns: state.weeklyCheckIns,
         userApps: state.userApps,
+        sidebarItems: state.sidebarItems,
       }),
+      onRehydrateStorage: () => (state) => {
+        // 确保 sidebarItems 是数组
+        if (!state || !Array.isArray(state.sidebarItems)) {
+          const defaultItems: SidebarItem[] = [
+            { id: 'dashboard', type: 'builtin', enabled: true, order: 0 },
+            { id: 'todos', type: 'builtin', enabled: true, order: 1 },
+            { id: 'projects', type: 'builtin', enabled: true, order: 2 },
+            { id: 'personal', type: 'builtin', enabled: true, order: 3 },
+            { id: 'schedule', type: 'builtin', enabled: true, order: 4 },
+            { id: 'journal', type: 'builtin', enabled: true, order: 5 },
+            { id: 'achievements', type: 'builtin', enabled: true, order: 6 },
+            { id: 'apps', type: 'builtin', enabled: true, order: 7 },
+          ];
+          if (state) {
+            state.sidebarItems = defaultItems;
+          }
+        }
+      },
     }
   )
 );
