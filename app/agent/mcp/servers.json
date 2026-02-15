@@ -1,0 +1,11 @@
+{
+  "servers": [
+    {
+      "name": "local-files",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["./scripts/mcp-local-files.js"],
+      "enabled": false
+    }
+  ]
+}

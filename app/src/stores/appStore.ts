@@ -18,6 +18,30 @@ import type {
 } from '@/types';
 import * as api from '@/lib/api';
 
+const DEFAULT_BUILTIN_SIDEBAR_ITEMS: SidebarItem[] = [
+  { id: 'dashboard', type: 'builtin', enabled: true, order: 0 },
+  { id: 'todos', type: 'builtin', enabled: true, order: 1 },
+  { id: 'projects', type: 'builtin', enabled: true, order: 2 },
+  { id: 'personal', type: 'builtin', enabled: true, order: 3 },
+  { id: 'schedule', type: 'builtin', enabled: true, order: 4 },
+  { id: 'journal', type: 'builtin', enabled: true, order: 5 },
+  { id: 'achievements', type: 'builtin', enabled: true, order: 6 },
+  { id: 'apps', type: 'builtin', enabled: true, order: 7 },
+  { id: 'agent', type: 'builtin', enabled: true, order: 8 },
+];
+
+function ensureBuiltinSidebarItems(items: SidebarItem[]): SidebarItem[] {
+  const merged = [...items];
+  for (const builtinItem of DEFAULT_BUILTIN_SIDEBAR_ITEMS) {
+    if (!merged.some((item) => item.id === builtinItem.id)) {
+      merged.push({ ...builtinItem, order: merged.length });
+    }
+  }
+  return merged
+    .sort((a, b) => a.order - b.order)
+    .map((item, index) => ({ ...item, order: index }));
+}
+
 interface AppState {
   // 当前页面
   currentPage: string;
@@ -505,19 +529,7 @@ export const useAppStore = create<AppState>()(
         // 初始化侧边栏配置（如果还没有）
         // 注意：需要在异步操作后重新获取状态，因为 persist 中间件可能已经恢复了状态
         const currentState = get();
-        if (currentState.sidebarItems.length === 0) {
-          const defaultItems: SidebarItem[] = [
-            { id: 'dashboard', type: 'builtin', enabled: true, order: 0 },
-            { id: 'todos', type: 'builtin', enabled: true, order: 1 },
-            { id: 'projects', type: 'builtin', enabled: true, order: 2 },
-            { id: 'personal', type: 'builtin', enabled: true, order: 3 },
-            { id: 'schedule', type: 'builtin', enabled: true, order: 4 },
-            { id: 'journal', type: 'builtin', enabled: true, order: 5 },
-            { id: 'achievements', type: 'builtin', enabled: true, order: 6 },
-            { id: 'apps', type: 'builtin', enabled: true, order: 7 },
-          ];
-          set({ sidebarItems: defaultItems });
-        }
+        set({ sidebarItems: ensureBuiltinSidebarItems(currentState.sidebarItems) });
       },
 
       // 侧边栏配置
@@ -588,22 +600,12 @@ export const useAppStore = create<AppState>()(
         sidebarItems: state.sidebarItems,
       }),
       onRehydrateStorage: () => (state) => {
-        // 确保 sidebarItems 是数组
-        if (!state || !Array.isArray(state.sidebarItems)) {
-          const defaultItems: SidebarItem[] = [
-            { id: 'dashboard', type: 'builtin', enabled: true, order: 0 },
-            { id: 'todos', type: 'builtin', enabled: true, order: 1 },
-            { id: 'projects', type: 'builtin', enabled: true, order: 2 },
-            { id: 'personal', type: 'builtin', enabled: true, order: 3 },
-            { id: 'schedule', type: 'builtin', enabled: true, order: 4 },
-            { id: 'journal', type: 'builtin', enabled: true, order: 5 },
-            { id: 'achievements', type: 'builtin', enabled: true, order: 6 },
-            { id: 'apps', type: 'builtin', enabled: true, order: 7 },
-          ];
-          if (state) {
-            state.sidebarItems = defaultItems;
-          }
+        if (!state) return;
+        if (!Array.isArray(state.sidebarItems)) {
+          state.sidebarItems = DEFAULT_BUILTIN_SIDEBAR_ITEMS;
+          return;
         }
+        state.sidebarItems = ensureBuiltinSidebarItems(state.sidebarItems);
       },
     }
   )

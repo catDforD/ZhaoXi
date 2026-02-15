@@ -27,6 +27,9 @@ export function TodoItem({ todo, onToggle, onEdit }: TodoItemProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.nativeEvent as KeyboardEvent).isComposing) {
+      return;
+    }
     if (e.key === 'Enter') {
       handleSave();
     } else if (e.key === 'Escape') {

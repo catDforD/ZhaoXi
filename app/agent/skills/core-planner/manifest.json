@@ -1,0 +1,8 @@
+{
+  "id": "core-planner",
+  "name": "Core Planner",
+  "description": "将用户目标拆解为工作台可执行动作。",
+  "version": "0.1.0",
+  "enabled": true,
+  "entry": "SKILL.md"
+}

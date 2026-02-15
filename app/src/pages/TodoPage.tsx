@@ -21,6 +21,9 @@ export function TodoPage() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.nativeEvent as KeyboardEvent).isComposing) {
+      return;
+    }
     if (e.key === 'Enter') {
       handleAddTodo();
     }

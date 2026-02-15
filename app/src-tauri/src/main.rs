@@ -41,6 +41,12 @@ fn main() {
             commands::create_personal_task,
             commands::update_personal_task,
             commands::delete_personal_task,
+            // Agent commands
+            commands::agent_chat,
+            commands::agent_execute_action,
+            commands::agent_list_capabilities,
+            commands::agent_reload_skills,
+            commands::agent_list_mcp_servers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

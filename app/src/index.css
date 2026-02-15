@@ -46,9 +46,16 @@
   
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei", "Microsoft JhengHei", "Noto Sans CJK SC", "Noto Sans SC", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
     background: linear-gradient(135deg, #1a3a5c 0%, #0d2847 50%, #1a4a6e 100%);
     min-height: 100vh;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"] {
+    ime-mode: auto;
+    font-family: inherit;
   }
 }
 

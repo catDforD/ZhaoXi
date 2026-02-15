@@ -8,6 +8,7 @@ import {
   Heart,
   Trophy,
   Grid3X3,
+  Bot,
   Settings,
   Image as ImageIcon,
   Trash2,
@@ -42,6 +43,7 @@ const BUILTIN_PAGES: BuiltinPageDef[] = [
   { id: 'journal', label: '生活手账', icon: Heart },
   { id: 'achievements', label: '我的成就', icon: Trophy },
   { id: 'apps', label: '应用中心', icon: Grid3X3 },
+  { id: 'agent', label: '工作台 Agent', icon: Bot },
 ];
 
 interface SidebarProps {

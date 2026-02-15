@@ -8,6 +8,7 @@ import { SchedulePage } from '@/pages/SchedulePage';
 import { JournalPage } from '@/pages/JournalPage';
 import { AchievementsPage } from '@/pages/AchievementsPage';
 import { AppsPage } from '@/pages/AppsPage';
+import { AgentPage } from '@/pages/AgentPage';
 import { AppContainer } from '@/pages/AppContainer';
 import { useAppStore } from '@/stores/appStore';
 
@@ -59,6 +60,8 @@ function App() {
         return <AchievementsPage />;
       case 'apps':
         return <AppsPage />;
+      case 'agent':
+        return <AgentPage />;
       default:
         return <Dashboard />;
     }
