@@ -9,7 +9,7 @@ router.get('/', async (req, res) => {
     const db = await getDb();
     const tasks = await db.all('SELECT * FROM personal_tasks ORDER BY date');
     res.json(tasks);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch personal tasks' });
   }
 });
@@ -26,7 +26,7 @@ router.post('/', async (req, res) => {
     );
     const task = await db.get('SELECT * FROM personal_tasks WHERE id = ?', id);
     res.json(task);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to create personal task' });
   }
 });
@@ -39,7 +39,7 @@ router.put('/:id', async (req, res) => {
     const db = await getDb();
     
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: unknown[] = [];
     
     if (title !== undefined) {
       updates.push('title = ?');
@@ -71,7 +71,7 @@ router.put('/:id', async (req, res) => {
     
     const task = await db.get('SELECT * FROM personal_tasks WHERE id = ?', id);
     res.json(task);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to update personal task' });
   }
 });
@@ -83,7 +83,7 @@ router.delete('/:id', async (req, res) => {
     const db = await getDb();
     await db.run('DELETE FROM personal_tasks WHERE id = ?', id);
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete personal task' });
   }
 });

@@ -9,7 +9,7 @@ router.get('/', async (req, res) => {
     const db = await getDb();
     const projects = await db.all('SELECT * FROM projects ORDER BY deadline');
     res.json(projects);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch projects' });
   }
 });
@@ -26,7 +26,7 @@ router.post('/', async (req, res) => {
     );
     const project = await db.get('SELECT * FROM projects WHERE id = ?', id);
     res.json(project);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to create project' });
   }
 });
@@ -39,7 +39,7 @@ router.put('/:id', async (req, res) => {
     const db = await getDb();
     
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: unknown[] = [];
     
     if (title !== undefined) {
       updates.push('title = ?');
@@ -67,7 +67,7 @@ router.put('/:id', async (req, res) => {
     
     const project = await db.get('SELECT * FROM projects WHERE id = ?', id);
     res.json(project);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to update project' });
   }
 });
@@ -79,7 +79,7 @@ router.delete('/:id', async (req, res) => {
     const db = await getDb();
     await db.run('DELETE FROM projects WHERE id = ?', id);
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete project' });
   }
 });

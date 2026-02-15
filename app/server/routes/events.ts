@@ -9,7 +9,7 @@ router.get('/', async (req, res) => {
     const db = await getDb();
     const events = await db.all('SELECT * FROM events ORDER BY date');
     res.json(events);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch events' });
   }
 });
@@ -21,7 +21,7 @@ router.get('/date/:date', async (req, res) => {
     const db = await getDb();
     const events = await db.all('SELECT * FROM events WHERE date = ?', date);
     res.json(events);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch events' });
   }
 });
@@ -38,7 +38,7 @@ router.post('/', async (req, res) => {
     );
     const event = await db.get('SELECT * FROM events WHERE id = ?', id);
     res.json(event);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to create event' });
   }
 });
@@ -51,7 +51,7 @@ router.put('/:id', async (req, res) => {
     const db = await getDb();
     
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: unknown[] = [];
     
     if (title !== undefined) {
       updates.push('title = ?');
@@ -79,7 +79,7 @@ router.put('/:id', async (req, res) => {
     
     const event = await db.get('SELECT * FROM events WHERE id = ?', id);
     res.json(event);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to update event' });
   }
 });
@@ -91,7 +91,7 @@ router.delete('/:id', async (req, res) => {
     const db = await getDb();
     await db.run('DELETE FROM events WHERE id = ?', id);
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete event' });
   }
 });

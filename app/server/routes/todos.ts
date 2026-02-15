@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
       ...t,
       completed: !!t.completed
     })));
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch todos' });
   }
 });
@@ -29,7 +29,7 @@ router.post('/', async (req, res) => {
     );
     const todo = await db.get('SELECT * FROM todos WHERE id = ?', id);
     res.json({ ...todo, completed: !!todo.completed });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to create todo' });
   }
 });
@@ -42,7 +42,7 @@ router.put('/:id', async (req, res) => {
     const db = await getDb();
     
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: unknown[] = [];
     
     if (title !== undefined) {
       updates.push('title = ?');
@@ -66,7 +66,7 @@ router.put('/:id', async (req, res) => {
     
     const todo = await db.get('SELECT * FROM todos WHERE id = ?', id);
     res.json({ ...todo, completed: !!todo.completed });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to update todo' });
   }
 });
@@ -78,7 +78,7 @@ router.delete('/:id', async (req, res) => {
     const db = await getDb();
     await db.run('DELETE FROM todos WHERE id = ?', id);
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete todo' });
   }
 });
