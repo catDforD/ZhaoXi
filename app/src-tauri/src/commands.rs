@@ -2,9 +2,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{command, AppHandle, Manager};
+use std::process::Stdio;
+use tauri::{command, AppHandle, Emitter, Manager};
+use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 use crate::database::get_db_pool;
 
@@ -685,9 +689,43 @@ pub struct AgentProviderConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSettings {
     pub provider: String,
+    #[serde(default = "default_openai_provider")]
     pub openai: AgentProviderConfig,
+    #[serde(default = "default_anthropic_provider")]
     pub anthropic: AgentProviderConfig,
+    #[serde(default = "default_minimax_provider")]
     pub minimax: AgentProviderConfig,
+    #[serde(default)]
+    pub codex: AgentCodexConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCodexConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub binary_path: Option<String>,
+    #[serde(default = "default_true")]
+    pub prefer_mcp: bool,
+    #[serde(default = "default_codex_exec_args")]
+    pub exec_args: Vec<String>,
+    #[serde(default = "default_codex_mcp_args")]
+    pub mcp_args: Vec<String>,
+    #[serde(default = "default_codex_timeout_ms")]
+    pub request_timeout_ms: u64,
+}
+
+impl Default for AgentCodexConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            binary_path: None,
+            prefer_mcp: true,
+            exec_args: default_codex_exec_args(),
+            mcp_args: default_codex_mcp_args(),
+            request_timeout_ms: default_codex_timeout_ms(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -699,6 +737,7 @@ pub struct AgentMessage {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentChatRequest {
+    pub request_id: Option<String>,
     pub messages: Vec<AgentMessage>,
     pub settings: AgentSettings,
 }
@@ -725,9 +764,61 @@ pub struct AgentExecuteRequest {
     pub action: AgentActionProposal,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentExecuteActionsRequest {
+    #[serde(default)]
+    pub request_id: Option<String>,
+    pub actions: Vec<AgentActionProposal>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AgentExecuteResponse {
     pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentExecutionAuditRecord {
+    pub id: String,
+    pub batch_id: String,
+    pub action_id: String,
+    pub action_type: String,
+    pub payload: Value,
+    pub before_state: Option<Value>,
+    pub after_state: Option<Value>,
+    pub success: bool,
+    pub error: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentExecuteActionsResponse {
+    pub success: bool,
+    pub batch_id: String,
+    pub message: String,
+    pub records: Vec<AgentExecutionAuditRecord>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStreamEvent {
+    pub request_id: String,
+    pub stage: String,
+    pub message: String,
+    pub meta: Option<Value>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCodexHealth {
+    pub found: bool,
+    pub binary: Option<String>,
+    pub mcp_available: bool,
+    pub exec_available: bool,
     pub message: String,
 }
 
@@ -856,15 +947,94 @@ pub struct DeleteCommandRequest {
 }
 
 #[command]
-pub async fn agent_chat(request: AgentChatRequest) -> Result<AgentChatResponse, String> {
+pub async fn agent_chat(
+    app: AppHandle,
+    request: AgentChatRequest,
+) -> Result<AgentChatResponse, String> {
     let snapshot = build_context_snapshot().await?;
-    match call_provider(&request, &snapshot).await {
-        Ok(response) => Ok(response),
-        Err(error) => Ok(local_fallback_response(
-            &request.messages,
-            &snapshot,
-            Some(error),
-        )),
+    let request_id = request
+        .request_id
+        .clone()
+        .unwrap_or_else(|| format!("req-{}", chrono::Utc::now().timestamp_millis()));
+    emit_agent_event(
+        &app,
+        &request_id,
+        "runtime_detect",
+        "正在选择 Agent 运行时",
+        None,
+    );
+
+    match call_provider(&app, &request_id, &request, &snapshot).await {
+        Ok(mut response) => {
+            if !response.actions.is_empty() {
+                emit_agent_event(
+                    &app,
+                    &request_id,
+                    "executing",
+                    "已生成动作，开始自动执行",
+                    Some(json!({ "count": response.actions.len() })),
+                );
+                let execution = agent_execute_actions_atomic(
+                    app.clone(),
+                    AgentExecuteActionsRequest {
+                        request_id: Some(request_id.clone()),
+                        actions: response.actions.clone(),
+                    },
+                )
+                .await?;
+
+                if execution.success {
+                    response.reply = format!(
+                        "{}\n\n已自动执行 {} 条动作（batch: {}）。",
+                        response.reply,
+                        execution.records.len(),
+                        execution.batch_id
+                    );
+                } else {
+                    response.reply = format!(
+                        "{}\n\n自动执行失败（batch: {}）：{}",
+                        response.reply, execution.batch_id, execution.message
+                    );
+                }
+                response.actions = vec![];
+            }
+
+            persist_agent_session(
+                &request_id,
+                &request.settings.provider,
+                &request.messages,
+                &response.reply,
+            )
+            .await;
+            emit_agent_event(&app, &request_id, "completed", "已完成", None);
+            Ok(response)
+        }
+        Err(error) => {
+            emit_agent_event(
+                &app,
+                &request_id,
+                "error",
+                "模型服务调用失败，准备降级",
+                Some(json!({ "reason": error.clone(), "retryable": true })),
+            );
+            emit_agent_event(
+                &app,
+                &request_id,
+                "fallback",
+                "已切换为本地建议模式",
+                None,
+            );
+            let response = local_fallback_response(&request.messages, &snapshot, Some(error));
+            persist_agent_session(
+                &request_id,
+                &request.settings.provider,
+                &request.messages,
+                &response.reply,
+            )
+            .await;
+            emit_agent_event(&app, &request_id, "completed", "已完成（fallback）", None);
+            Ok(response)
+        }
     }
 }
 
@@ -874,6 +1044,7 @@ pub async fn agent_execute_action(
 ) -> Result<AgentExecuteResponse, String> {
     let pool = get_db_pool()?;
     let action = request.action;
+    validate_action(&action.r#type, &action.payload)?;
     let result = match action.r#type.as_str() {
         "todo.create" => {
             let title = get_required_str(&action.payload, "title")?;
@@ -1154,6 +1325,149 @@ pub async fn agent_execute_action(
 }
 
 #[command]
+pub async fn agent_execute_actions_atomic(
+    app: AppHandle,
+    request: AgentExecuteActionsRequest,
+) -> Result<AgentExecuteActionsResponse, String> {
+    let pool = get_db_pool()?;
+    let batch_id = format!("batch-{}", chrono::Utc::now().timestamp_millis());
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
+    let mut records: Vec<AgentExecutionAuditRecord> = vec![];
+    let now = chrono::Utc::now().to_rfc3339();
+    let total = request.actions.len();
+    let mut completed = 0usize;
+    let mut success = 0usize;
+    let mut failed = 0usize;
+
+    if let Some(request_id) = &request.request_id {
+        emit_agent_event(
+            &app,
+            request_id,
+            "executing",
+            "开始执行动作",
+            Some(json!({
+                "total": total,
+                "completed": completed,
+                "success": success,
+                "failed": failed
+            })),
+        );
+    }
+
+    for action in &request.actions {
+        validate_action(&action.r#type, &action.payload)?;
+        let before_state = None;
+        let result = execute_action_with_transaction(&mut tx, action).await;
+        match result {
+            Ok(message) => {
+                completed += 1;
+                success += 1;
+                records.push(AgentExecutionAuditRecord {
+                    id: format!(
+                        "audit-{}",
+                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+                    ),
+                    batch_id: batch_id.clone(),
+                    action_id: action.id.clone(),
+                    action_type: action.r#type.clone(),
+                    payload: action.payload.clone(),
+                    before_state,
+                    after_state: Some(json!({ "message": message })),
+                    success: true,
+                    error: None,
+                    created_at: now.clone(),
+                });
+                if let Some(request_id) = &request.request_id {
+                    emit_agent_event(
+                        &app,
+                        request_id,
+                        "executing",
+                        "动作执行成功",
+                        Some(json!({
+                            "total": total,
+                            "completed": completed,
+                            "success": success,
+                            "failed": failed,
+                            "actionType": action.r#type,
+                            "actionId": action.id
+                        })),
+                    );
+                }
+            }
+            Err(error) => {
+                completed += 1;
+                failed += 1;
+                tx.rollback()
+                    .await
+                    .map_err(|e| format!("Failed to rollback transaction: {}", e))?;
+                if let Some(request_id) = &request.request_id {
+                    emit_agent_event(
+                        &app,
+                        request_id,
+                        "executing",
+                        "动作执行失败，事务已回滚",
+                        Some(json!({
+                            "total": total,
+                            "completed": completed,
+                            "success": success,
+                            "failed": failed,
+                            "actionType": action.r#type,
+                            "actionId": action.id
+                        })),
+                    );
+                    emit_agent_event(
+                        &app,
+                        request_id,
+                        "error",
+                        "批量动作执行失败",
+                        Some(json!({ "reason": error.clone(), "retryable": true })),
+                    );
+                }
+                let failed = AgentExecutionAuditRecord {
+                    id: format!(
+                        "audit-{}",
+                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+                    ),
+                    batch_id: batch_id.clone(),
+                    action_id: action.id.clone(),
+                    action_type: action.r#type.clone(),
+                    payload: action.payload.clone(),
+                    before_state: None,
+                    after_state: None,
+                    success: false,
+                    error: Some(error.clone()),
+                    created_at: now,
+                };
+                persist_audit_records(&[failed.clone()]).await;
+                return Ok(AgentExecuteActionsResponse {
+                    success: false,
+                    batch_id,
+                    message: error,
+                    records: vec![failed],
+                });
+            }
+        }
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+    persist_audit_records(&records).await;
+
+    Ok(AgentExecuteActionsResponse {
+        success: true,
+        batch_id,
+        message: "批量动作已执行".to_string(),
+        records,
+    })
+}
+
+#[command]
 pub async fn agent_list_capabilities(app: AppHandle) -> Result<AgentCapabilities, String> {
     let tooling = load_tooling_config(&app)?;
     let skills = tooling
@@ -1358,6 +1672,39 @@ pub async fn agent_delete_command(
     Ok(())
 }
 
+#[command]
+pub async fn agent_codex_health(request: AgentChatRequest) -> Result<AgentCodexHealth, String> {
+    let binary = resolve_codex_binary(request.settings.codex.binary_path.as_deref());
+    let Ok(binary) = binary else {
+        return Ok(AgentCodexHealth {
+            found: false,
+            binary: None,
+            mcp_available: false,
+            exec_available: false,
+            message: "未找到 codex 可执行文件".to_string(),
+        });
+    };
+
+    let mcp_available = probe_codex_mcp(&binary, &request.settings.codex)
+        .await
+        .is_ok();
+    let exec_available = probe_codex_exec(&binary, &request.settings.codex)
+        .await
+        .is_ok();
+
+    Ok(AgentCodexHealth {
+        found: true,
+        binary: Some(binary),
+        mcp_available,
+        exec_available,
+        message: if mcp_available || exec_available {
+            "Codex 本地运行时可用".to_string()
+        } else {
+            "Codex 已找到，但 mcp/exec 探测均失败".to_string()
+        },
+    })
+}
+
 fn get_required_str<'a>(payload: &'a Value, key: &str) -> Result<&'a str, String> {
     payload
         .get(key)
@@ -1371,6 +1718,326 @@ fn get_optional_str<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
         .get(key)
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
+}
+
+fn validate_action(action_type: &str, payload: &Value) -> Result<(), String> {
+    let allowed = [
+        "todo.create",
+        "todo.update",
+        "todo.delete",
+        "project.create",
+        "project.update_progress",
+        "project.delete",
+        "event.create",
+        "event.update",
+        "event.delete",
+        "personal.create",
+        "personal.update",
+        "personal.delete",
+        "query.snapshot",
+    ];
+    if !allowed.contains(&action_type) {
+        return Err(format!("Action is not allowed: {}", action_type));
+    }
+    if !payload.is_object() {
+        return Err("Action payload must be an object".to_string());
+    }
+    Ok(())
+}
+
+async fn execute_action_with_transaction(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    action: &AgentActionProposal,
+) -> Result<String, String> {
+    match action.r#type.as_str() {
+        "todo.create" => {
+            let title = get_required_str(&action.payload, "title")?;
+            let priority = get_optional_str(&action.payload, "priority").unwrap_or("normal");
+            let id = action
+                .payload
+                .get("id")
+                .and_then(|item| item.as_str())
+                .unwrap_or(&chrono::Utc::now().timestamp_millis().to_string())
+                .to_string();
+            sqlx::query("INSERT INTO todos (id, title, priority) VALUES (?1, ?2, ?3)")
+                .bind(&id)
+                .bind(title)
+                .bind(priority)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to create todo: {}", e))?;
+            Ok("待办已创建".to_string())
+        }
+        "todo.update" => {
+            let id = get_required_str(&action.payload, "id")?;
+            let title = get_optional_str(&action.payload, "title");
+            let completed = action
+                .payload
+                .get("completed")
+                .and_then(|value| value.as_bool());
+            let priority = get_optional_str(&action.payload, "priority");
+            if title.is_none() && completed.is_none() && priority.is_none() {
+                return Err("todo.update 缺少可更新字段".to_string());
+            }
+            let mut updates: Vec<String> = Vec::new();
+            if title.is_some() {
+                updates.push("title = ?".to_string());
+            }
+            if completed.is_some() {
+                updates.push("completed = ?".to_string());
+            }
+            if priority.is_some() {
+                updates.push("priority = ?".to_string());
+            }
+            let query = format!("UPDATE todos SET {} WHERE id = ?", updates.join(", "));
+            let mut query_builder = sqlx::query(&query);
+            if let Some(value) = title {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = completed {
+                query_builder = query_builder.bind(if value { 1 } else { 0 });
+            }
+            if let Some(value) = priority {
+                query_builder = query_builder.bind(value);
+            }
+            query_builder = query_builder.bind(id);
+            query_builder
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to update todo: {}", e))?;
+            Ok("待办已更新".to_string())
+        }
+        "todo.delete" => {
+            let id = get_required_str(&action.payload, "id")?;
+            sqlx::query("DELETE FROM todos WHERE id = ?1")
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to delete todo: {}", e))?;
+            Ok("待办已删除".to_string())
+        }
+        "project.create" => {
+            let title = get_required_str(&action.payload, "title")?;
+            let deadline = get_required_str(&action.payload, "deadline")?;
+            let id = action
+                .payload
+                .get("id")
+                .and_then(|item| item.as_str())
+                .unwrap_or(&chrono::Utc::now().timestamp_millis().to_string())
+                .to_string();
+            sqlx::query(
+                "INSERT INTO projects (id, title, deadline, progress, status) VALUES (?1, ?2, ?3, 0, 'active')",
+            )
+            .bind(&id)
+            .bind(title)
+            .bind(deadline)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| format!("Failed to create project: {}", e))?;
+            Ok("项目已创建".to_string())
+        }
+        "project.update_progress" => {
+            let id = get_required_str(&action.payload, "id")?;
+            let progress = action
+                .payload
+                .get("progress")
+                .and_then(|value| value.as_i64())
+                .ok_or("project.update_progress 缺少 progress")?;
+            sqlx::query("UPDATE projects SET progress = ?1 WHERE id = ?2")
+                .bind(progress as i32)
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to update project progress: {}", e))?;
+            Ok("项目进度已更新".to_string())
+        }
+        "project.delete" => {
+            let id = get_required_str(&action.payload, "id")?;
+            sqlx::query("DELETE FROM projects WHERE id = ?1")
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to delete project: {}", e))?;
+            Ok("项目已删除".to_string())
+        }
+        "event.create" => {
+            let title = get_required_str(&action.payload, "title")?;
+            let date = get_required_str(&action.payload, "date")?;
+            let color = get_optional_str(&action.payload, "color").unwrap_or("blue");
+            let note = get_optional_str(&action.payload, "note");
+            let id = action
+                .payload
+                .get("id")
+                .and_then(|item| item.as_str())
+                .unwrap_or(&chrono::Utc::now().timestamp_millis().to_string())
+                .to_string();
+            sqlx::query(
+                "INSERT INTO events (id, title, date, color, note) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(&id)
+            .bind(title)
+            .bind(date)
+            .bind(color)
+            .bind(note)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| format!("Failed to create event: {}", e))?;
+            Ok("日程已创建".to_string())
+        }
+        "event.update" => {
+            let id = get_required_str(&action.payload, "id")?;
+            let title = get_optional_str(&action.payload, "title");
+            let date = get_optional_str(&action.payload, "date");
+            let color = get_optional_str(&action.payload, "color");
+            let note = get_optional_str(&action.payload, "note");
+            if title.is_none() && date.is_none() && color.is_none() && note.is_none() {
+                return Err("event.update 缺少可更新字段".to_string());
+            }
+            let mut updates: Vec<String> = Vec::new();
+            if title.is_some() {
+                updates.push("title = ?".to_string());
+            }
+            if date.is_some() {
+                updates.push("date = ?".to_string());
+            }
+            if color.is_some() {
+                updates.push("color = ?".to_string());
+            }
+            if note.is_some() {
+                updates.push("note = ?".to_string());
+            }
+            let query = format!("UPDATE events SET {} WHERE id = ?", updates.join(", "));
+            let mut query_builder = sqlx::query(&query);
+            if let Some(value) = title {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = date {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = color {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = note {
+                query_builder = query_builder.bind(value);
+            }
+            query_builder = query_builder.bind(id);
+            query_builder
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to update event: {}", e))?;
+            Ok("日程已更新".to_string())
+        }
+        "event.delete" => {
+            let id = get_required_str(&action.payload, "id")?;
+            sqlx::query("DELETE FROM events WHERE id = ?1")
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to delete event: {}", e))?;
+            Ok("日程已删除".to_string())
+        }
+        "personal.create" => {
+            let title = get_required_str(&action.payload, "title")?;
+            let id = action
+                .payload
+                .get("id")
+                .and_then(|item| item.as_str())
+                .unwrap_or(&chrono::Utc::now().timestamp_millis().to_string())
+                .to_string();
+            let budget = action
+                .payload
+                .get("budget")
+                .and_then(|value| value.as_f64());
+            let date = get_optional_str(&action.payload, "date");
+            let location = get_optional_str(&action.payload, "location");
+            let note = get_optional_str(&action.payload, "note");
+            sqlx::query(
+                "INSERT INTO personal_tasks (id, title, budget, date, location, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(&id)
+            .bind(title)
+            .bind(budget)
+            .bind(date)
+            .bind(location)
+            .bind(note)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| format!("Failed to create personal task: {}", e))?;
+            Ok("个人事务已创建".to_string())
+        }
+        "personal.update" => {
+            let id = get_required_str(&action.payload, "id")?;
+            let title = get_optional_str(&action.payload, "title");
+            let budget = action
+                .payload
+                .get("budget")
+                .and_then(|value| value.as_f64());
+            let date = get_optional_str(&action.payload, "date");
+            let location = get_optional_str(&action.payload, "location");
+            let note = get_optional_str(&action.payload, "note");
+            if title.is_none()
+                && budget.is_none()
+                && date.is_none()
+                && location.is_none()
+                && note.is_none()
+            {
+                return Err("personal.update 缺少可更新字段".to_string());
+            }
+            let mut updates: Vec<String> = Vec::new();
+            if title.is_some() {
+                updates.push("title = ?".to_string());
+            }
+            if budget.is_some() {
+                updates.push("budget = ?".to_string());
+            }
+            if date.is_some() {
+                updates.push("date = ?".to_string());
+            }
+            if location.is_some() {
+                updates.push("location = ?".to_string());
+            }
+            if note.is_some() {
+                updates.push("note = ?".to_string());
+            }
+            let query = format!(
+                "UPDATE personal_tasks SET {} WHERE id = ?",
+                updates.join(", ")
+            );
+            let mut query_builder = sqlx::query(&query);
+            if let Some(value) = title {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = budget {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = date {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = location {
+                query_builder = query_builder.bind(value);
+            }
+            if let Some(value) = note {
+                query_builder = query_builder.bind(value);
+            }
+            query_builder = query_builder.bind(id);
+            query_builder
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to update personal task: {}", e))?;
+            Ok("个人事务已更新".to_string())
+        }
+        "personal.delete" => {
+            let id = get_required_str(&action.payload, "id")?;
+            sqlx::query("DELETE FROM personal_tasks WHERE id = ?1")
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| format!("Failed to delete personal task: {}", e))?;
+            Ok("个人事务已删除".to_string())
+        }
+        "query.snapshot" => Ok("当前快照已生成".to_string()),
+        _ => Err(format!("Unsupported action type: {}", action.r#type)),
+    }
 }
 
 async fn build_context_snapshot() -> Result<Value, String> {
@@ -1476,6 +2143,8 @@ fn local_fallback_response(
 }
 
 async fn call_provider(
+    app: &AppHandle,
+    request_id: &str,
     request: &AgentChatRequest,
     snapshot: &Value,
 ) -> Result<AgentChatResponse, String> {
@@ -1484,6 +2153,7 @@ async fn call_provider(
         "openai" => call_openai(request, snapshot).await,
         "anthropic" => call_anthropic(request, snapshot).await,
         "minimax" => call_minimax(request, snapshot).await,
+        "codex_local" => call_codex_local(app, request_id, request, snapshot).await,
         _ => Err(format!("Unsupported provider: {}", provider)),
     }
 }
@@ -1699,10 +2369,249 @@ async fn call_minimax(
     parse_llm_response(content)
 }
 
+async fn call_codex_local(
+    app: &AppHandle,
+    request_id: &str,
+    request: &AgentChatRequest,
+    snapshot: &Value,
+) -> Result<AgentChatResponse, String> {
+    if !request.settings.codex.enabled {
+        return Err("Codex local runtime is disabled".to_string());
+    }
+
+    let binary = resolve_codex_binary(request.settings.codex.binary_path.as_deref())?;
+    emit_agent_event(
+        app,
+        request_id,
+        "runtime_detect",
+        "已检测到 codex 本地运行时",
+        Some(json!({ "binary": binary })),
+    );
+
+    if request.settings.codex.prefer_mcp {
+        emit_agent_event(
+            app,
+            request_id,
+            "mcp_connect",
+            "尝试连接 Codex MCP 通道",
+            None,
+        );
+        if let Err(error) = probe_codex_mcp(&binary, &request.settings.codex).await {
+            emit_agent_event(
+                app,
+                request_id,
+                "exec_fallback",
+                "MCP 通道不可用，降级到 exec",
+                Some(json!({ "reason": error })),
+            );
+        }
+    }
+
+    emit_agent_event(app, request_id, "planning", "通过 Codex 生成执行计划", None);
+
+    let prompt = build_codex_prompt(request, snapshot);
+    let content = run_codex_exec(&binary, &request.settings.codex, &prompt).await?;
+    let mut parsed = parse_llm_response(&content)?;
+
+    if is_generic_identity_reply(&parsed.reply) && parsed.actions.is_empty() {
+        let retry_prompt = format!(
+            "{}\n\n请注意：不要做身份介绍，也不要回复固定模板。请直接回答用户最后一个问题，并给出可执行动作（如果需要）。",
+            prompt
+        );
+        let retry_content = run_codex_exec(&binary, &request.settings.codex, &retry_prompt).await?;
+        parsed = parse_llm_response(&retry_content)?;
+    }
+
+    Ok(parsed)
+}
+
+fn build_codex_prompt(request: &AgentChatRequest, snapshot: &Value) -> String {
+    let latest_user = request
+        .messages
+        .iter()
+        .rev()
+        .find(|item| item.role == "user")
+        .map(|item| item.content.clone())
+        .unwrap_or_else(|| "请根据当前工作台快照给出建议".to_string());
+    let conversation = request
+        .messages
+        .iter()
+        .map(|item| format!("{}: {}", item.role, item.content))
+        .collect::<Vec<String>>()
+        .join("\n");
+    format!(
+        "{}\n\n用户最后一条消息:\n{}\n\n上下文快照:\n{}\n\n历史消息:\n{}\n\n请严格按 JSON 返回，并且回复内容必须针对“用户最后一条消息”，禁止固定模板。",
+        build_system_prompt(snapshot),
+        latest_user,
+        snapshot,
+        conversation
+    )
+}
+
+async fn run_codex_exec(
+    binary: &str,
+    config: &AgentCodexConfig,
+    prompt: &str,
+) -> Result<String, String> {
+    let mut args = if config.exec_args.is_empty() {
+        default_codex_exec_args()
+    } else {
+        config.exec_args.clone()
+    };
+    args.push(prompt.to_string());
+
+    let mut cmd = Command::new(binary);
+    cmd.args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+
+    let duration = Duration::from_millis(config.request_timeout_ms.max(1000));
+    let output = timeout(duration, cmd.output())
+        .await
+        .map_err(|_| "Codex exec timed out".to_string())?
+        .map_err(|e| format!("Failed to run codex exec: {}", e))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.is_empty() {
+            return Err("Codex exec returned empty output".to_string());
+        }
+        Ok(extract_codex_last_message(&stdout))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(format!(
+            "Codex exec failed (status {}): {}",
+            output.status,
+            if stderr.is_empty() {
+                "no stderr".to_string()
+            } else {
+                stderr
+            }
+        ))
+    }
+}
+
+fn extract_codex_last_message(stdout: &str) -> String {
+    let mut candidate: Option<String> = None;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('{') {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        if let Some(payload_reply) = value
+            .get("payload")
+            .and_then(|payload| payload.get("reply"))
+            .and_then(|reply| reply.as_str())
+        {
+            return json!({
+                "reply": payload_reply,
+                "actions": value
+                    .get("payload")
+                    .and_then(|payload| payload.get("actions"))
+                    .cloned()
+                    .unwrap_or_else(|| Value::Array(vec![]))
+            })
+            .to_string();
+        }
+
+        let item_type = value
+            .get("item")
+            .and_then(|item| item.get("type"))
+            .and_then(|item_type| item_type.as_str());
+        if item_type == Some("agent_message") {
+            if let Some(text) = value
+                .get("item")
+                .and_then(|item| item.get("text"))
+                .and_then(|text| text.as_str())
+            {
+                candidate = Some(text.to_string());
+            }
+        }
+    }
+
+    candidate.unwrap_or_else(|| stdout.to_string())
+}
+
+fn is_generic_identity_reply(reply: &str) -> bool {
+    let text = reply.trim().to_lowercase();
+    text.contains("基于 codex")
+        || text.contains("gpt-5")
+        || text == "我是 zhaoxi workbench agent。你可以直接告诉我你的安排目标，我会先给出可执行计划，再由你确认执行。"
+}
+
+fn resolve_codex_binary(path_override: Option<&str>) -> Result<String, String> {
+    if let Some(path) = path_override {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+        return Err(format!(
+            "Configured codex binary path does not exist: {}",
+            path
+        ));
+    }
+
+    let path_env = env::var_os("PATH").ok_or("PATH is not set".to_string())?;
+    for segment in env::split_paths(&path_env) {
+        let candidate = segment.join("codex");
+        if candidate.exists() {
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+        #[cfg(windows)]
+        {
+            let candidate_exe = segment.join("codex.exe");
+            if candidate_exe.exists() {
+                return Ok(candidate_exe.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    Err("codex was not found in PATH".to_string())
+}
+
+async fn probe_codex_mcp(binary: &str, config: &AgentCodexConfig) -> Result<(), String> {
+    let mut args = if config.mcp_args.is_empty() {
+        default_codex_mcp_args()
+    } else {
+        config.mcp_args.clone()
+    };
+    args.push("--help".to_string());
+    run_codex_probe(binary, args, config.request_timeout_ms).await
+}
+
+async fn probe_codex_exec(binary: &str, config: &AgentCodexConfig) -> Result<(), String> {
+    let mut args = if config.exec_args.is_empty() {
+        default_codex_exec_args()
+    } else {
+        config.exec_args.clone()
+    };
+    args.push("--help".to_string());
+    run_codex_probe(binary, args, config.request_timeout_ms).await
+}
+
+async fn run_codex_probe(binary: &str, args: Vec<String>, timeout_ms: u64) -> Result<(), String> {
+    let mut cmd = Command::new(binary);
+    cmd.args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null());
+    timeout(Duration::from_millis(timeout_ms.max(1000)), cmd.output())
+        .await
+        .map_err(|_| "Codex probe timed out".to_string())?
+        .map_err(|e| format!("Codex probe failed: {}", e))?;
+    Ok(())
+}
+
 fn build_system_prompt(snapshot: &Value) -> String {
     format!(
-        "你是 ZhaoXi Workbench Agent。你必须基于上下文数据给出清晰建议，并且仅输出 JSON，结构为: {{\"reply\":\"string\",\"actions\":[{{\"id\":\"string\",\"type\":\"string\",\"title\":\"string\",\"reason\":\"string\",\"payload\":{{}},\"requiresApproval\":true}}]}}。\
+        "你是 ZhaoXi Workbench Agent。你必须基于上下文数据给出清晰建议，并且仅输出 JSON，结构为: {{\"reply\":\"string\",\"actions\":[{{\"id\":\"string\",\"type\":\"string\",\"title\":\"string\",\"reason\":\"string\",\"payload\":{{}},\"requiresApproval\":false}}]}}。\
         action type 只能使用: todo.create,todo.update,todo.delete,project.create,project.update_progress,project.delete,event.create,event.update,event.delete,personal.create,personal.update,personal.delete,query.snapshot。\
+        你必须直接回答用户问题，禁止固定自我介绍或与问题无关的模板句。\
         如果不需要动作，actions 返回空数组。\
         当前上下文: {}",
         snapshot
@@ -1756,8 +2665,138 @@ fn extract_json_block(content: &str) -> String {
     content.trim().to_string()
 }
 
+fn emit_agent_event(
+    app: &AppHandle,
+    request_id: &str,
+    stage: &str,
+    message: &str,
+    meta: Option<Value>,
+) {
+    let event = AgentStreamEvent {
+        request_id: request_id.to_string(),
+        stage: stage.to_string(),
+        message: message.to_string(),
+        meta: meta.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = app.emit("agent_stream", &event);
+    let request_id = request_id.to_string();
+    let stage = stage.to_string();
+    let message = message.to_string();
+    tokio::spawn(async move {
+        persist_agent_event(&request_id, &stage, &message, meta).await;
+    });
+}
+
+async fn persist_agent_event(request_id: &str, stage: &str, message: &str, meta: Option<Value>) {
+    let Ok(pool) = get_db_pool() else {
+        return;
+    };
+    let _ = sqlx::query(
+        "INSERT INTO agent_events (id, request_id, stage, message, meta_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(format!("evt-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)))
+    .bind(request_id)
+    .bind(stage)
+    .bind(message)
+    .bind(meta.map(|item| item.to_string()))
+    .execute(pool)
+    .await;
+}
+
+async fn persist_agent_session(
+    request_id: &str,
+    provider: &str,
+    messages: &[AgentMessage],
+    reply: &str,
+) {
+    let Ok(pool) = get_db_pool() else {
+        return;
+    };
+    let latest_user = messages
+        .iter()
+        .rev()
+        .find(|item| item.role == "user")
+        .map(|item| item.content.clone());
+    let _ = sqlx::query(
+        "INSERT INTO agent_sessions (id, request_id, provider, user_message, reply) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(format!("sess-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)))
+    .bind(request_id)
+    .bind(provider)
+    .bind(latest_user)
+    .bind(reply)
+    .execute(pool)
+    .await;
+}
+
+async fn persist_audit_records(records: &[AgentExecutionAuditRecord]) {
+    let Ok(pool) = get_db_pool() else {
+        return;
+    };
+    for record in records {
+        let _ = sqlx::query(
+            "INSERT INTO agent_action_audits (id, batch_id, action_id, action_type, payload_json, before_state_json, after_state_json, success, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(&record.id)
+        .bind(&record.batch_id)
+        .bind(&record.action_id)
+        .bind(&record.action_type)
+        .bind(record.payload.to_string())
+        .bind(record.before_state.as_ref().map(|item| item.to_string()))
+        .bind(record.after_state.as_ref().map(|item| item.to_string()))
+        .bind(if record.success { 1 } else { 0 })
+        .bind(record.error.clone())
+        .execute(pool)
+        .await;
+    }
+}
+
 fn default_true() -> bool {
     true
+}
+
+fn default_codex_exec_args() -> Vec<String> {
+    vec![
+        "exec".to_string(),
+        "--json".to_string(),
+        "--skip-git-repo-check".to_string(),
+    ]
+}
+
+fn default_codex_mcp_args() -> Vec<String> {
+    vec!["mcp-server".to_string()]
+}
+
+fn default_codex_timeout_ms() -> u64 {
+    120_000
+}
+
+fn default_openai_provider() -> AgentProviderConfig {
+    AgentProviderConfig {
+        base_url: "https://api.openai.com/v1".to_string(),
+        api_key: String::new(),
+        model: "gpt-4o-mini".to_string(),
+        api_version: None,
+    }
+}
+
+fn default_anthropic_provider() -> AgentProviderConfig {
+    AgentProviderConfig {
+        base_url: "https://api.anthropic.com/v1".to_string(),
+        api_key: String::new(),
+        model: "claude-3-5-sonnet-latest".to_string(),
+        api_version: Some("2023-06-01".to_string()),
+    }
+}
+
+fn default_minimax_provider() -> AgentProviderConfig {
+    AgentProviderConfig {
+        base_url: "https://api.minimax.chat/v1".to_string(),
+        api_key: String::new(),
+        model: "MiniMax-M2.1".to_string(),
+        api_version: None,
+    }
 }
 
 fn default_stdio_transport() -> String {

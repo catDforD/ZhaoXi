@@ -1,4 +1,4 @@
-export type LlmProvider = 'openai' | 'anthropic' | 'minimax';
+export type LlmProvider = 'codex_local';
 export type SlashMode = 'insert' | 'execute';
 
 export interface LlmProviderConfig {
@@ -15,9 +15,16 @@ export interface AgentSettings {
   eventReminderLeadMinutes: number;
   slashMode: SlashMode;
   provider: LlmProvider;
-  openai: LlmProviderConfig;
-  anthropic: LlmProviderConfig;
-  minimax: LlmProviderConfig;
+  codex: AgentCodexConfig;
+}
+
+export interface AgentCodexConfig {
+  enabled: boolean;
+  binaryPath?: string;
+  preferMcp: boolean;
+  execArgs: string[];
+  mcpArgs: string[];
+  requestTimeoutMs: number;
 }
 
 export interface McpServerConfig {
@@ -90,6 +97,7 @@ export interface AgentActionProposal {
 }
 
 export interface AgentChatRequest {
+  requestId?: string;
   messages: AgentMessage[];
   settings: AgentSettings;
 }
@@ -105,6 +113,79 @@ export interface AgentExecuteRequest {
 
 export interface AgentExecuteResponse {
   success: boolean;
+  message: string;
+}
+
+export interface AgentExecuteActionsRequest {
+  requestId?: string;
+  actions: AgentActionProposal[];
+}
+
+export interface AgentExecutionAuditRecord {
+  id: string;
+  batchId: string;
+  actionId: string;
+  actionType: string;
+  payload: Record<string, unknown>;
+  beforeState?: Record<string, unknown>;
+  afterState?: Record<string, unknown>;
+  success: boolean;
+  error?: string;
+  createdAt: string;
+}
+
+export interface AgentExecuteActionsResponse {
+  success: boolean;
+  batchId: string;
+  message: string;
+  records: AgentExecutionAuditRecord[];
+}
+
+export interface AgentStreamEvent {
+  requestId: string;
+  stage:
+    | 'runtime_detect'
+    | 'mcp_connect'
+    | 'exec_fallback'
+    | 'planning'
+    | 'executing'
+    | 'fallback'
+    | 'completed'
+    | 'error';
+  message: string;
+  meta?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export type AgentRunStatus = 'idle' | 'running' | 'fallback' | 'completed' | 'error';
+
+export interface AgentRunState {
+  requestId: string;
+  status: AgentRunStatus;
+  stage: AgentStreamEvent['stage'];
+  percent: number;
+  message: string;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  actionProgress: {
+    total: number;
+    completed: number;
+    success: number;
+    failed: number;
+  };
+  events: AgentStreamEvent[];
+  error?: {
+    reason: string;
+    retryable: boolean;
+  };
+}
+
+export interface AgentCodexHealth {
+  found: boolean;
+  binary?: string;
+  mcpAvailable: boolean;
+  execAvailable: boolean;
   message: string;
 }
 

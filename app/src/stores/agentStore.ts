@@ -8,46 +8,35 @@ import type {
   AgentCapabilities,
   AgentCommand,
   AgentMessage,
+  AgentRunState,
   AgentSettings,
+  AgentStreamEvent,
   ExecutionAuditRecord,
-  LlmProvider,
-  McpServerConfig,
-  SkillConfig,
 } from '@/types/agent';
 
 interface AgentState {
   messages: AgentMessage[];
+  currentRun: AgentRunState | null;
+  lastUserInput: string | null;
   pendingActions: AgentActionProposal[];
   auditLog: ExecutionAuditRecord[];
   settings: AgentSettings;
   capabilities: AgentCapabilities | null;
-  mcpServers: string[];
-  mcpConfigs: McpServerConfig[];
-  skills: SkillConfig[];
   commands: AgentCommand[];
   toolingLoading: boolean;
   isSending: boolean;
   isExecuting: boolean;
   sendMessage: (content: string) => Promise<void>;
+  retryLastMessage: () => Promise<void>;
+  consumeStreamEvent: (event: AgentStreamEvent) => void;
   executeAction: (action: AgentActionProposal) => Promise<void>;
   dismissAction: (actionId: string) => void;
   clearSession: () => void;
-  setProvider: (provider: LlmProvider) => void;
   setSlashMode: (mode: 'insert' | 'execute') => void;
-  updateProviderConfig: (
-    provider: LlmProvider,
-    updates: Partial<AgentSettings['openai']>
-  ) => void;
   updateReminderConfig: (morningBriefTime: string, leadMinutes: number) => void;
+  updateCodexConfig: (updates: Partial<AgentSettings['codex']>) => void;
   loadCapabilities: () => Promise<void>;
-  reloadSkills: () => Promise<void>;
-  loadMcpServers: () => Promise<void>;
   loadToolingConfig: () => Promise<void>;
-  upsertMcpServer: (server: McpServerConfig) => Promise<void>;
-  deleteMcpServer: (name: string) => Promise<void>;
-  importSkill: (path: string) => Promise<void>;
-  toggleSkill: (id: string, enabled: boolean) => Promise<void>;
-  deleteSkill: (id: string) => Promise<void>;
   upsertCommand: (command: AgentCommand) => Promise<void>;
   importCommandMarkdown: (path: string) => Promise<void>;
   deleteCommand: (slug: string) => Promise<void>;
@@ -59,22 +48,13 @@ const DEFAULT_SETTINGS: AgentSettings = {
   morningBriefTime: '08:30',
   eventReminderLeadMinutes: 30,
   slashMode: 'insert',
-  provider: 'openai',
-  openai: {
-    baseUrl: 'https://api.openai.com/v1',
-    apiKey: '',
-    model: 'gpt-4o-mini',
-  },
-  anthropic: {
-    baseUrl: 'https://api.anthropic.com/v1',
-    apiKey: '',
-    model: 'claude-3-5-sonnet-latest',
-    apiVersion: '2023-06-01',
-  },
-  minimax: {
-    baseUrl: 'https://api.minimax.chat/v1',
-    apiKey: '',
-    model: 'MiniMax-M2.1',
+  provider: 'codex_local',
+  codex: {
+    enabled: true,
+    preferMcp: true,
+    execArgs: ['exec', '--json', '--skip-git-repo-check'],
+    mcpArgs: ['mcp-server'],
+    requestTimeoutMs: 120000,
   },
 };
 
@@ -111,6 +91,36 @@ function getErrorMessage(error: unknown): string {
   return '未知错误';
 }
 
+const STAGE_PERCENT: Record<AgentStreamEvent['stage'], number> = {
+  runtime_detect: 10,
+  mcp_connect: 20,
+  exec_fallback: 20,
+  planning: 60,
+  executing: 70,
+  fallback: 90,
+  completed: 100,
+  error: 0,
+};
+
+function createRunState(requestId: string): AgentRunState {
+  const startedAt = new Date().toISOString();
+  return {
+    requestId,
+    status: 'running',
+    stage: 'runtime_detect',
+    percent: 0,
+    message: '请求已发送',
+    startedAt,
+    actionProgress: {
+      total: 0,
+      completed: 0,
+      success: 0,
+      failed: 0,
+    },
+    events: [],
+  };
+}
+
 export const useAgentStore = create<AgentState>()(
   persist(
     (set, get) => ({
@@ -121,12 +131,11 @@ export const useAgentStore = create<AgentState>()(
         ),
       ],
       pendingActions: [],
+      currentRun: null,
+      lastUserInput: null,
       auditLog: [],
       settings: DEFAULT_SETTINGS,
       capabilities: null,
-      mcpServers: [],
-      mcpConfigs: [],
-      skills: [],
       commands: [],
       toolingLoading: false,
       isSending: false,
@@ -135,16 +144,20 @@ export const useAgentStore = create<AgentState>()(
       sendMessage: async (content) => {
         const trimmed = content.trim();
         if (!trimmed || get().isSending) return;
+        const requestId = `req-${Date.now()}`;
 
         const userMessage = createMessage('user', trimmed);
         set((state) => ({
           messages: [...state.messages, userMessage],
+          currentRun: createRunState(requestId),
+          lastUserInput: trimmed,
           isSending: true,
         }));
 
         try {
           const state = get();
           const response = await agentApi.agentChat({
+            requestId,
             messages: state.messages,
             settings: state.settings,
           });
@@ -162,10 +175,96 @@ export const useAgentStore = create<AgentState>()(
               ...state.messages,
               createMessage('assistant', '我暂时无法连接模型服务，已切换为本地建议模式。'),
             ],
+            currentRun: state.currentRun
+              ? {
+                  ...state.currentRun,
+                  status: 'error',
+                  stage: 'error',
+                  message: getErrorMessage(error),
+                  endedAt: new Date().toISOString(),
+                  durationMs:
+                    new Date().getTime() - new Date(state.currentRun.startedAt).getTime(),
+                  error: { reason: getErrorMessage(error), retryable: true },
+                }
+              : null,
             isSending: false,
           }));
           toast.error('Agent 请求失败，请检查 Provider 配置');
         }
+      },
+
+      retryLastMessage: async () => {
+        const last = get().lastUserInput;
+        if (!last || get().isSending) return;
+        await get().sendMessage(last);
+      },
+
+      consumeStreamEvent: (event) => {
+        const currentRun = get().currentRun;
+        if (!currentRun) return;
+
+        let current = currentRun;
+        if (event.requestId && event.requestId !== current.requestId) {
+          // Allow first incoming stream event to bind the canonical requestId
+          // if backend generated/normalized a different id.
+          if (current.events.length === 0 && current.status === 'running') {
+            current = { ...current, requestId: event.requestId };
+          } else {
+            return;
+          }
+        }
+
+        const actionProgress = { ...current.actionProgress };
+        if (event.meta && typeof event.meta === 'object') {
+          const total = event.meta.total;
+          const completed = event.meta.completed;
+          const success = event.meta.success;
+          const failed = event.meta.failed;
+          if (typeof total === 'number') actionProgress.total = total;
+          if (typeof completed === 'number') actionProgress.completed = completed;
+          if (typeof success === 'number') actionProgress.success = success;
+          if (typeof failed === 'number') actionProgress.failed = failed;
+        }
+
+        let percent = STAGE_PERCENT[event.stage] ?? current.percent;
+        if (event.stage === 'executing' && actionProgress.total > 0) {
+          const ratio = Math.min(1, actionProgress.completed / actionProgress.total);
+          percent = Math.round(60 + ratio * 35);
+        } else if (event.stage === 'error') {
+          percent = current.percent;
+        }
+
+        const nextRun: AgentRunState = {
+          ...current,
+          stage: event.stage,
+          message: event.message,
+          percent,
+          actionProgress,
+          events: [...current.events, event].slice(-80),
+        };
+
+        if (event.stage === 'fallback') {
+          nextRun.status = 'fallback';
+        } else if (event.stage === 'completed') {
+          const endedAt = new Date().toISOString();
+          nextRun.status = 'completed';
+          nextRun.endedAt = endedAt;
+          nextRun.durationMs = new Date(endedAt).getTime() - new Date(current.startedAt).getTime();
+        } else if (event.stage === 'error') {
+          const endedAt = new Date().toISOString();
+          const reason =
+            typeof event.meta?.reason === 'string' ? event.meta.reason : event.message;
+          const retryable =
+            typeof event.meta?.retryable === 'boolean' ? event.meta.retryable : true;
+          nextRun.status = 'error';
+          nextRun.endedAt = endedAt;
+          nextRun.durationMs = new Date(endedAt).getTime() - new Date(current.startedAt).getTime();
+          nextRun.error = { reason, retryable };
+        } else {
+          nextRun.status = 'running';
+        }
+
+        set({ currentRun: nextRun });
       },
 
       executeAction: async (action) => {
@@ -222,16 +321,9 @@ export const useAgentStore = create<AgentState>()(
             ),
           ],
           pendingActions: [],
+          currentRun: null,
+          lastUserInput: null,
         });
-      },
-
-      setProvider: (provider) => {
-        set((state) => ({
-          settings: {
-            ...state.settings,
-            provider,
-          },
-        }));
       },
 
       setSlashMode: (mode) => {
@@ -239,18 +331,6 @@ export const useAgentStore = create<AgentState>()(
           settings: {
             ...state.settings,
             slashMode: mode,
-          },
-        }));
-      },
-
-      updateProviderConfig: (provider, updates) => {
-        set((state) => ({
-          settings: {
-            ...state.settings,
-            [provider]: {
-              ...state.settings[provider],
-              ...updates,
-            },
           },
         }));
       },
@@ -265,6 +345,18 @@ export const useAgentStore = create<AgentState>()(
         }));
       },
 
+      updateCodexConfig: (updates) => {
+        set((state) => ({
+          settings: {
+            ...state.settings,
+            codex: {
+              ...state.settings.codex,
+              ...updates,
+            },
+          },
+        }));
+      },
+
       loadCapabilities: async () => {
         try {
           const capabilities = await agentApi.agentListCapabilities();
@@ -274,101 +366,17 @@ export const useAgentStore = create<AgentState>()(
         }
       },
 
-      reloadSkills: async () => {
-        try {
-          const result = await agentApi.agentReloadSkills();
-          toast.success(`Skills 已重载 (${result.reloaded})`);
-          await get().loadToolingConfig();
-          await get().loadCapabilities();
-        } catch (error) {
-          console.error('Failed to reload skills:', error);
-          toast.error('Skills 重载失败');
-        }
-      },
-
-      loadMcpServers: async () => {
-        try {
-          const servers = await agentApi.agentListMcpServers();
-          set({ mcpServers: servers });
-        } catch (error) {
-          console.error('Failed to load MCP servers:', error);
-          set({ mcpServers: [] });
-        }
-      },
-
       loadToolingConfig: async () => {
         set({ toolingLoading: true });
         try {
           const tooling = await agentApi.agentGetToolingConfig();
           set({
-            mcpConfigs: tooling.mcpServers,
-            skills: tooling.skills,
             commands: tooling.commands,
             toolingLoading: false,
           });
-          await get().loadMcpServers();
         } catch (error) {
           console.error('Failed to load tooling config:', error);
           set({ toolingLoading: false });
-        }
-      },
-
-      upsertMcpServer: async (server) => {
-        try {
-          await agentApi.agentUpsertMcpServer(server);
-          await get().loadToolingConfig();
-          await get().loadCapabilities();
-          toast.success('MCP 配置已保存');
-        } catch (error) {
-          console.error('Failed to save MCP config:', error);
-          toast.error('保存 MCP 配置失败');
-        }
-      },
-
-      deleteMcpServer: async (name) => {
-        try {
-          await agentApi.agentDeleteMcpServer(name);
-          await get().loadToolingConfig();
-          await get().loadCapabilities();
-          toast.success('MCP 已删除');
-        } catch (error) {
-          console.error('Failed to delete MCP config:', error);
-          toast.error('删除 MCP 失败');
-        }
-      },
-
-      importSkill: async (path) => {
-        try {
-          const imported = await agentApi.agentImportSkill(path);
-          await get().loadToolingConfig();
-          await get().loadCapabilities();
-          toast.success(`Skill 已导入: ${imported.id}`);
-        } catch (error) {
-          console.error('Failed to import skill:', error);
-          toast.error(`导入 Skill 失败: ${getErrorMessage(error)}`);
-        }
-      },
-
-      toggleSkill: async (id, enabled) => {
-        try {
-          await agentApi.agentToggleSkill(id, enabled);
-          await get().loadToolingConfig();
-          await get().loadCapabilities();
-        } catch (error) {
-          console.error('Failed to toggle skill:', error);
-          toast.error('更新 Skill 状态失败');
-        }
-      },
-
-      deleteSkill: async (id) => {
-        try {
-          await agentApi.agentDeleteSkill(id);
-          await get().loadToolingConfig();
-          await get().loadCapabilities();
-          toast.success('Skill 已删除');
-        } catch (error) {
-          console.error('Failed to delete skill:', error);
-          toast.error('删除 Skill 失败');
         }
       },
 
@@ -417,17 +425,10 @@ export const useAgentStore = create<AgentState>()(
         state.settings = {
           ...DEFAULT_SETTINGS,
           ...state.settings,
-          openai: {
-            ...DEFAULT_SETTINGS.openai,
-            ...state.settings?.openai,
-          },
-          anthropic: {
-            ...DEFAULT_SETTINGS.anthropic,
-            ...state.settings?.anthropic,
-          },
-          minimax: {
-            ...DEFAULT_SETTINGS.minimax,
-            ...state.settings?.minimax,
+          provider: 'codex_local',
+          codex: {
+            ...DEFAULT_SETTINGS.codex,
+            ...state.settings?.codex,
           },
         };
         if (state.settings.enabled && isReminderDue(state.settings.morningBriefTime)) {

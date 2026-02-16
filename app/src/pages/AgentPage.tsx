@@ -2,24 +2,21 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Bot,
   Send,
-  RefreshCw,
-  Wrench,
   PlugZap,
   Trash2,
   Check,
   X,
   Settings2,
-  FolderPlus,
   Slash,
-  Terminal,
   FileUp,
 } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { listen } from '@tauri-apps/api/event';
+import ReactMarkdown from 'react-markdown';
 import { toast } from 'sonner';
 import { GlassCard } from '@/components/layout/GlassCard';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import {
   Command,
@@ -29,88 +26,13 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { useAgentStore } from '@/stores/agentStore';
-import type { AgentCommand, McpServerConfig } from '@/types/agent';
-
-const MCP_JSON_EXAMPLE = `{
-  "MiniMax": {
-    "command": "uvx",
-    "args": ["minimax-coding-plan-mcp", "-y"],
-    "env": {
-      "MINIMAX_API_HOST": "https://api.minimaxi.com",
-      "MINIMAX_API_KEY": "<your-key>"
-    }
-  }
-}`;
-
-function normalizeMcpInput(input: string): McpServerConfig[] {
-  const parsed = JSON.parse(input) as unknown;
-
-  const toServer = (name: string, value: Record<string, unknown>): McpServerConfig => {
-    const command = typeof value.command === 'string' ? value.command : '';
-    const args = Array.isArray(value.args)
-      ? value.args.filter((item): item is string => typeof item === 'string')
-      : [];
-    const envRaw = value.env;
-    const env: Record<string, string> = {};
-    if (envRaw && typeof envRaw === 'object' && !Array.isArray(envRaw)) {
-      Object.entries(envRaw).forEach(([key, envValue]) => {
-        if (typeof envValue === 'string') {
-          env[key] = envValue;
-        }
-      });
-    }
-
-    return {
-      name,
-      transport: 'stdio',
-      command,
-      args,
-      env,
-      cwd: typeof value.cwd === 'string' ? value.cwd : undefined,
-      enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
-    };
-  };
-
-  if (Array.isArray(parsed)) {
-    return parsed
-      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item))
-      .map((item, index) => {
-        const name = typeof item.name === 'string' ? item.name : `server-${index + 1}`;
-        return toServer(name, item);
-      });
-  }
-
-  if (!parsed || typeof parsed !== 'object') {
-    return [];
-  }
-
-  const asObject = parsed as Record<string, unknown>;
-
-  if (Array.isArray(asObject.servers)) {
-    return asObject.servers
-      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item))
-      .map((item, index) => {
-        const name = typeof item.name === 'string' ? item.name : `server-${index + 1}`;
-        return toServer(name, item);
-      });
-  }
-
-  if (typeof asObject.name === 'string') {
-    return [toServer(asObject.name, asObject)];
-  }
-
-  return Object.entries(asObject)
-    .filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
-    .map(([name, value]) => toServer(name, value as Record<string, unknown>));
-}
+import type { AgentCommand, AgentStreamEvent } from '@/types/agent';
 
 export function AgentPage() {
   const [input, setInput] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
 
-  const [mcpJsonInput, setMcpJsonInput] = useState(MCP_JSON_EXAMPLE);
-  const [skillImportPath, setSkillImportPath] = useState('');
   const [commandImportPath, setCommandImportPath] = useState('');
 
   const {
@@ -118,42 +40,47 @@ export function AgentPage() {
     pendingActions,
     auditLog,
     settings,
-    capabilities,
-    mcpServers,
-    mcpConfigs,
-    skills,
     commands,
     isSending,
     isExecuting,
-    toolingLoading,
     sendMessage,
     executeAction,
     dismissAction,
     clearSession,
-    setProvider,
     setSlashMode,
-    updateProviderConfig,
     updateReminderConfig,
-    loadCapabilities,
-    reloadSkills,
-    loadMcpServers,
+    updateCodexConfig,
     loadToolingConfig,
-    upsertMcpServer,
-    deleteMcpServer,
-    importSkill,
-    toggleSkill,
-    deleteSkill,
     importCommandMarkdown,
     deleteCommand,
   } = useAgentStore();
 
-  const activeProviderConfig = settings[settings.provider];
+  useEffect(() => {
+    loadToolingConfig();
+  }, [loadToolingConfig]);
 
   useEffect(() => {
-    loadCapabilities();
-    loadMcpServers();
-    loadToolingConfig();
-  }, [loadCapabilities, loadMcpServers, loadToolingConfig]);
+    let unlisten: (() => void) | undefined;
+    void listen<AgentStreamEvent>('agent_stream', (event) => {
+      const raw = event.payload as AgentStreamEvent & {
+        request_id?: string;
+        created_at?: string;
+      };
+      const payload: AgentStreamEvent = {
+        ...raw,
+        requestId: raw.requestId ?? raw.request_id ?? '',
+        createdAt: raw.createdAt ?? raw.created_at ?? new Date().toISOString(),
+      };
+      if (!payload?.message) return;
+      if (payload.stage === 'error') toast.error(payload.message);
+    }).then((cleanup) => {
+      unlisten = cleanup;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   const slashQuery = useMemo(() => {
     if (!input.startsWith('/')) return '';
@@ -240,45 +167,6 @@ export function AgentPage() {
     return `待确认动作 ${pendingActions.length} 条`;
   }, [pendingActions.length]);
 
-  const importMcpFromJson = async () => {
-    try {
-      const servers = normalizeMcpInput(mcpJsonInput.trim());
-      if (servers.length === 0) {
-        toast.error('未解析到有效 MCP 配置');
-        return;
-      }
-      for (const server of servers) {
-        if (!server.name || !server.command) {
-          throw new Error(`MCP 配置缺少 name 或 command: ${JSON.stringify(server)}`);
-        }
-        await upsertMcpServer(server);
-      }
-      toast.success(`已导入 ${servers.length} 个 MCP 配置`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'MCP JSON 解析失败';
-      toast.error(`导入 MCP 失败: ${message}`);
-    }
-  };
-
-  const handlePickSkillDir = async () => {
-    const selected = await openDialog({ directory: true, multiple: false });
-    if (!selected || Array.isArray(selected)) {
-      toast.info('未选择目录');
-      return;
-    }
-    setSkillImportPath(selected);
-    await importSkill(selected);
-  };
-
-  const handleImportSkillByPath = async () => {
-    const path = skillImportPath.trim();
-    if (!path) {
-      toast.error('请先输入技能目录路径');
-      return;
-    }
-    await importSkill(path);
-  };
-
   const handlePickCommandFile = async () => {
     const selected = await openDialog({
       directory: false,
@@ -337,7 +225,31 @@ export function AgentPage() {
                     ? 'max-w-[85%] rounded-xl px-3 py-2 bg-cyan-500/20 text-cyan-50 text-sm'
                     : 'max-w-[85%] rounded-xl px-3 py-2 bg-white/10 text-white text-sm'}
                 >
-                  {message.content}
+                  <div className="markdown-body whitespace-pre-wrap break-words leading-6">
+                    <ReactMarkdown
+                      skipHtml
+                      components={{
+                        a: ({ ...props }) => (
+                          <a {...props} className="text-cyan-300 underline break-all" target="_blank" rel="noreferrer" />
+                        ),
+                        code: ({ children, ...props }) => (
+                          <code {...props} className="rounded bg-black/25 px-1 py-0.5 text-cyan-100">
+                            {children}
+                          </code>
+                        ),
+                        pre: ({ children, ...props }) => (
+                          <pre {...props} className="my-2 overflow-auto rounded-md bg-black/30 p-2 text-xs">
+                            {children}
+                          </pre>
+                        ),
+                        ul: ({ children, ...props }) => <ul {...props} className="my-1 list-disc pl-5">{children}</ul>,
+                        ol: ({ children, ...props }) => <ol {...props} className="my-1 list-decimal pl-5">{children}</ol>,
+                        p: ({ children, ...props }) => <p {...props} className="my-1">{children}</p>,
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               </div>
             ))}
@@ -402,67 +314,28 @@ export function AgentPage() {
               <h3 className="text-white font-semibold">执行面板</h3>
               <p className="text-xs text-white/50">{actionCountText}</p>
             </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                className="bg-white/5 border-white/10 text-white hover:bg-white/10"
-                onClick={reloadSkills}
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Reload Skills
-              </Button>
-            </div>
           </div>
 
           <div className="space-y-3 overflow-auto flex-1 pr-1">
             <GlassCard className="p-3 bg-white/5">
               <div className="flex items-center gap-2 mb-2 text-sm text-white/80">
                 <Settings2 className="w-4 h-4" />
-                Provider 设置
-              </div>
-              <div className="grid grid-cols-3 gap-2 mb-2">
-                <Button
-                  variant="outline"
-                  className={settings.provider === 'openai' ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-200' : 'bg-white/5 border-white/10 text-white'}
-                  onClick={() => setProvider('openai')}
-                >
-                  OpenAI
-                </Button>
-                <Button
-                  variant="outline"
-                  className={settings.provider === 'anthropic' ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-200' : 'bg-white/5 border-white/10 text-white'}
-                  onClick={() => setProvider('anthropic')}
-                >
-                  Anthropic
-                </Button>
-                <Button
-                  variant="outline"
-                  className={settings.provider === 'minimax' ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-200' : 'bg-white/5 border-white/10 text-white'}
-                  onClick={() => setProvider('minimax')}
-                >
-                  MiniMax
-                </Button>
+                Codex 设置
               </div>
               <div className="space-y-2">
                 <Input
-                  value={activeProviderConfig.baseUrl}
-                  onChange={(e) => updateProviderConfig(settings.provider, { baseUrl: e.target.value })}
-                  placeholder="Base URL"
+                  value={settings.codex.binaryPath ?? ''}
+                  onChange={(e) => updateCodexConfig({ binaryPath: e.target.value || undefined })}
+                  placeholder="Codex Binary Path (optional)"
                   className="bg-white/5 border-white/10 text-white"
                 />
-                <Input
-                  value={activeProviderConfig.model}
-                  onChange={(e) => updateProviderConfig(settings.provider, { model: e.target.value })}
-                  placeholder="Model"
-                  className="bg-white/5 border-white/10 text-white"
-                />
-                <Input
-                  type="password"
-                  value={activeProviderConfig.apiKey}
-                  onChange={(e) => updateProviderConfig(settings.provider, { apiKey: e.target.value })}
-                  placeholder="API Key"
-                  className="bg-white/5 border-white/10 text-white"
-                />
+                <div className="flex items-center justify-between rounded-md border border-white/10 p-2">
+                  <span className="text-xs text-white/70">优先 MCP 通道</span>
+                  <Switch
+                    checked={settings.codex.preferMcp}
+                    onCheckedChange={(checked) => updateCodexConfig({ preferMcp: checked })}
+                  />
+                </div>
                 <div className="flex items-center justify-between rounded-md border border-white/10 p-2">
                   <span className="text-xs text-white/70">Slash 选择后直接执行</span>
                   <Switch
@@ -470,100 +343,6 @@ export function AgentPage() {
                     onCheckedChange={(checked) => setSlashMode(checked ? 'execute' : 'insert')}
                   />
                 </div>
-              </div>
-            </GlassCard>
-
-            <GlassCard className="p-3 bg-white/5">
-              <div className="flex items-center gap-2 mb-2 text-sm text-white/80">
-                <Wrench className="w-4 h-4" />
-                能力概览 {toolingLoading ? '(加载中...)' : ''}
-              </div>
-              <p className="text-xs text-white/50">内置工具: {capabilities?.builtinTools.join(', ') || '加载中'}</p>
-              <p className="text-xs text-white/50 mt-1">Skills: {skills.filter((item) => item.enabled).map((item) => item.id).join(', ') || '无'}</p>
-              <p className="text-xs text-white/50 mt-1">MCP: {mcpServers.join(', ') || '无'}</p>
-              <p className="text-xs text-white/50 mt-1">Commands: {commands.filter((item) => item.enabled).length}</p>
-            </GlassCard>
-
-            <GlassCard className="p-3 bg-white/5 space-y-2">
-              <div className="flex items-center justify-between text-sm text-white/80">
-                <div className="flex items-center gap-2">
-                  <Terminal className="w-4 h-4" />
-                  MCP 配置（JSON 输入）
-                </div>
-              </div>
-              <Textarea
-                value={mcpJsonInput}
-                onChange={(e) => setMcpJsonInput(e.target.value)}
-                className="bg-white/5 border-white/10 text-white min-h-40 font-mono text-xs"
-                placeholder={MCP_JSON_EXAMPLE}
-              />
-              <Button size="sm" className="bg-cyan-500/20 text-cyan-200 border border-cyan-500/30" onClick={() => void importMcpFromJson()}>
-                导入 MCP JSON
-              </Button>
-              <div className="space-y-2 max-h-44 overflow-auto">
-                {mcpConfigs.map((server) => (
-                  <div key={server.name} className="rounded-md border border-white/10 p-2 text-xs text-white/70">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-white">{server.name}</span>
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          checked={server.enabled}
-                          onCheckedChange={(checked) => void upsertMcpServer({ ...server, enabled: checked })}
-                        />
-                        <Button size="sm" variant="outline" className="h-7 bg-white/5 border-white/10 text-white" onClick={() => void deleteMcpServer(server.name)}>
-                          删除
-                        </Button>
-                      </div>
-                    </div>
-                    <p className="mt-1 text-white/50">{server.command} {server.args.join(' ')}</p>
-                  </div>
-                ))}
-              </div>
-            </GlassCard>
-
-            <GlassCard className="p-3 bg-white/5 space-y-2">
-              <div className="flex items-center justify-between text-sm text-white/80">
-                <div className="flex items-center gap-2">
-                  <FolderPlus className="w-4 h-4" />
-                  Skills（目录导入）
-                </div>
-                <Button size="sm" variant="outline" className="bg-white/5 border-white/10 text-white" onClick={() => void handlePickSkillDir()}>
-                  选择目录
-                </Button>
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  value={skillImportPath}
-                  onChange={(e) => setSkillImportPath(e.target.value)}
-                  placeholder="/path/to/skill-folder"
-                  className="bg-white/5 border-white/10 text-white"
-                />
-                <Button size="sm" className="bg-cyan-500/20 text-cyan-200 border border-cyan-500/30" onClick={() => void handleImportSkillByPath()}>
-                  导入
-                </Button>
-              </div>
-              <p className="text-[11px] text-white/50">目录中需包含 `manifest.json` 与技能文件。</p>
-              <div className="space-y-2 max-h-40 overflow-auto">
-                {skills.map((skill) => (
-                  <div key={skill.id} className="rounded-md border border-white/10 p-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-white font-medium">{skill.id}</span>
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          checked={skill.enabled}
-                          disabled={skill.source !== 'user'}
-                          onCheckedChange={(checked) => void toggleSkill(skill.id, checked)}
-                        />
-                        {skill.source === 'user' && (
-                          <Button size="sm" variant="outline" className="h-7 bg-white/5 border-white/10 text-white" onClick={() => void deleteSkill(skill.id)}>
-                            删除
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                    <p className="text-white/50 mt-1">{skill.description || '无描述'} · {skill.source}</p>
-                  </div>
-                ))}
               </div>
             </GlassCard>
 
