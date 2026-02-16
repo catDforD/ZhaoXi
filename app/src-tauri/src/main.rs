@@ -47,6 +47,17 @@ fn main() {
             commands::agent_list_capabilities,
             commands::agent_reload_skills,
             commands::agent_list_mcp_servers,
+            commands::agent_get_tooling_config,
+            commands::agent_reload_tooling,
+            commands::agent_upsert_mcp_server,
+            commands::agent_delete_mcp_server,
+            commands::agent_import_skill,
+            commands::agent_toggle_skill,
+            commands::agent_delete_skill,
+            commands::agent_list_commands,
+            commands::agent_upsert_command,
+            commands::agent_import_command_markdown,
+            commands::agent_delete_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

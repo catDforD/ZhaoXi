@@ -1,4 +1,5 @@
 export type LlmProvider = 'openai' | 'anthropic' | 'minimax';
+export type SlashMode = 'insert' | 'execute';
 
 export interface LlmProviderConfig {
   baseUrl: string;
@@ -12,10 +13,49 @@ export interface AgentSettings {
   defaultLayout: 'split' | 'single';
   morningBriefTime: string;
   eventReminderLeadMinutes: number;
+  slashMode: SlashMode;
   provider: LlmProvider;
   openai: LlmProviderConfig;
   anthropic: LlmProviderConfig;
   minimax: LlmProviderConfig;
+}
+
+export interface McpServerConfig {
+  name: string;
+  transport: 'stdio';
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string;
+  enabled: boolean;
+}
+
+export interface SkillConfig {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  enabled: boolean;
+  path: string;
+  source: 'builtin' | 'user';
+}
+
+export interface AgentCommand {
+  slug: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+  mode: SlashMode;
+  tags: string[];
+  aliases: string[];
+  body: string;
+  source: 'builtin' | 'user';
+}
+
+export interface AgentToolingConfig {
+  mcpServers: McpServerConfig[];
+  skills: SkillConfig[];
+  commands: AgentCommand[];
 }
 
 export interface AgentMessage {

@@ -6,10 +6,13 @@ import { useAppStore } from '@/stores/appStore';
 import type {
   AgentActionProposal,
   AgentCapabilities,
+  AgentCommand,
   AgentMessage,
   AgentSettings,
   ExecutionAuditRecord,
   LlmProvider,
+  McpServerConfig,
+  SkillConfig,
 } from '@/types/agent';
 
 interface AgentState {
@@ -19,6 +22,10 @@ interface AgentState {
   settings: AgentSettings;
   capabilities: AgentCapabilities | null;
   mcpServers: string[];
+  mcpConfigs: McpServerConfig[];
+  skills: SkillConfig[];
+  commands: AgentCommand[];
+  toolingLoading: boolean;
   isSending: boolean;
   isExecuting: boolean;
   sendMessage: (content: string) => Promise<void>;
@@ -26,6 +33,7 @@ interface AgentState {
   dismissAction: (actionId: string) => void;
   clearSession: () => void;
   setProvider: (provider: LlmProvider) => void;
+  setSlashMode: (mode: 'insert' | 'execute') => void;
   updateProviderConfig: (
     provider: LlmProvider,
     updates: Partial<AgentSettings['openai']>
@@ -34,6 +42,15 @@ interface AgentState {
   loadCapabilities: () => Promise<void>;
   reloadSkills: () => Promise<void>;
   loadMcpServers: () => Promise<void>;
+  loadToolingConfig: () => Promise<void>;
+  upsertMcpServer: (server: McpServerConfig) => Promise<void>;
+  deleteMcpServer: (name: string) => Promise<void>;
+  importSkill: (path: string) => Promise<void>;
+  toggleSkill: (id: string, enabled: boolean) => Promise<void>;
+  deleteSkill: (id: string) => Promise<void>;
+  upsertCommand: (command: AgentCommand) => Promise<void>;
+  importCommandMarkdown: (path: string) => Promise<void>;
+  deleteCommand: (slug: string) => Promise<void>;
 }
 
 const DEFAULT_SETTINGS: AgentSettings = {
@@ -41,6 +58,7 @@ const DEFAULT_SETTINGS: AgentSettings = {
   defaultLayout: 'split',
   morningBriefTime: '08:30',
   eventReminderLeadMinutes: 30,
+  slashMode: 'insert',
   provider: 'openai',
   openai: {
     baseUrl: 'https://api.openai.com/v1',
@@ -84,6 +102,15 @@ function buildMorningSummary(): string {
   return `早安。你今天有 ${pendingTodos} 个待办、${activeProjects} 个进行中项目、${todaysEvents} 个日程事件。`;
 }
 
+function getErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return '未知错误';
+}
+
 export const useAgentStore = create<AgentState>()(
   persist(
     (set, get) => ({
@@ -98,6 +125,10 @@ export const useAgentStore = create<AgentState>()(
       settings: DEFAULT_SETTINGS,
       capabilities: null,
       mcpServers: [],
+      mcpConfigs: [],
+      skills: [],
+      commands: [],
+      toolingLoading: false,
       isSending: false,
       isExecuting: false,
 
@@ -203,6 +234,15 @@ export const useAgentStore = create<AgentState>()(
         }));
       },
 
+      setSlashMode: (mode) => {
+        set((state) => ({
+          settings: {
+            ...state.settings,
+            slashMode: mode,
+          },
+        }));
+      },
+
       updateProviderConfig: (provider, updates) => {
         set((state) => ({
           settings: {
@@ -238,6 +278,7 @@ export const useAgentStore = create<AgentState>()(
         try {
           const result = await agentApi.agentReloadSkills();
           toast.success(`Skills 已重载 (${result.reloaded})`);
+          await get().loadToolingConfig();
           await get().loadCapabilities();
         } catch (error) {
           console.error('Failed to reload skills:', error);
@@ -252,6 +293,115 @@ export const useAgentStore = create<AgentState>()(
         } catch (error) {
           console.error('Failed to load MCP servers:', error);
           set({ mcpServers: [] });
+        }
+      },
+
+      loadToolingConfig: async () => {
+        set({ toolingLoading: true });
+        try {
+          const tooling = await agentApi.agentGetToolingConfig();
+          set({
+            mcpConfigs: tooling.mcpServers,
+            skills: tooling.skills,
+            commands: tooling.commands,
+            toolingLoading: false,
+          });
+          await get().loadMcpServers();
+        } catch (error) {
+          console.error('Failed to load tooling config:', error);
+          set({ toolingLoading: false });
+        }
+      },
+
+      upsertMcpServer: async (server) => {
+        try {
+          await agentApi.agentUpsertMcpServer(server);
+          await get().loadToolingConfig();
+          await get().loadCapabilities();
+          toast.success('MCP 配置已保存');
+        } catch (error) {
+          console.error('Failed to save MCP config:', error);
+          toast.error('保存 MCP 配置失败');
+        }
+      },
+
+      deleteMcpServer: async (name) => {
+        try {
+          await agentApi.agentDeleteMcpServer(name);
+          await get().loadToolingConfig();
+          await get().loadCapabilities();
+          toast.success('MCP 已删除');
+        } catch (error) {
+          console.error('Failed to delete MCP config:', error);
+          toast.error('删除 MCP 失败');
+        }
+      },
+
+      importSkill: async (path) => {
+        try {
+          const imported = await agentApi.agentImportSkill(path);
+          await get().loadToolingConfig();
+          await get().loadCapabilities();
+          toast.success(`Skill 已导入: ${imported.id}`);
+        } catch (error) {
+          console.error('Failed to import skill:', error);
+          toast.error(`导入 Skill 失败: ${getErrorMessage(error)}`);
+        }
+      },
+
+      toggleSkill: async (id, enabled) => {
+        try {
+          await agentApi.agentToggleSkill(id, enabled);
+          await get().loadToolingConfig();
+          await get().loadCapabilities();
+        } catch (error) {
+          console.error('Failed to toggle skill:', error);
+          toast.error('更新 Skill 状态失败');
+        }
+      },
+
+      deleteSkill: async (id) => {
+        try {
+          await agentApi.agentDeleteSkill(id);
+          await get().loadToolingConfig();
+          await get().loadCapabilities();
+          toast.success('Skill 已删除');
+        } catch (error) {
+          console.error('Failed to delete skill:', error);
+          toast.error('删除 Skill 失败');
+        }
+      },
+
+      upsertCommand: async (command) => {
+        try {
+          await agentApi.agentUpsertCommand(command);
+          await get().loadToolingConfig();
+          toast.success('Command 已保存');
+        } catch (error) {
+          console.error('Failed to upsert command:', error);
+          toast.error('保存 Command 失败');
+        }
+      },
+
+      importCommandMarkdown: async (path) => {
+        try {
+          const imported = await agentApi.agentImportCommandMarkdown(path);
+          await get().loadToolingConfig();
+          toast.success(`Command 已导入: /${imported.slug}`);
+        } catch (error) {
+          console.error('Failed to import command markdown:', error);
+          toast.error(`导入 Command 失败: ${getErrorMessage(error)}`);
+        }
+      },
+
+      deleteCommand: async (slug) => {
+        try {
+          await agentApi.agentDeleteCommand(slug);
+          await get().loadToolingConfig();
+          toast.success('Command 已删除');
+        } catch (error) {
+          console.error('Failed to delete command:', error);
+          toast.error('删除 Command 失败');
         }
       },
     }),

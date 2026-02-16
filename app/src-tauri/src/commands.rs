@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::command;
+use tauri::{command, AppHandle, Manager};
 
 use crate::database::get_db_pool;
 
@@ -53,7 +54,7 @@ pub struct PersonalTask {
 pub async fn get_todos() -> Result<Vec<Todo>, String> {
     let pool = get_db_pool()?;
     let rows = sqlx::query(
-        "SELECT id, title, completed, priority, created_at FROM todos ORDER BY created_at DESC"
+        "SELECT id, title, completed, priority, created_at FROM todos ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -86,23 +87,20 @@ pub async fn create_todo(request: CreateTodoRequest) -> Result<Todo, String> {
     let id = chrono::Utc::now().timestamp_millis().to_string();
     let priority = request.priority.unwrap_or_else(|| "normal".to_string());
 
-    sqlx::query(
-        "INSERT INTO todos (id, title, priority) VALUES (?1, ?2, ?3)"
-    )
-    .bind(&id)
-    .bind(&request.title)
-    .bind(&priority)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create todo: {}", e))?;
+    sqlx::query("INSERT INTO todos (id, title, priority) VALUES (?1, ?2, ?3)")
+        .bind(&id)
+        .bind(&request.title)
+        .bind(&priority)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create todo: {}", e))?;
 
-    let row = sqlx::query(
-        "SELECT id, title, completed, priority, created_at FROM todos WHERE id = ?1"
-    )
-    .bind(&id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch created todo: {}", e))?;
+    let row =
+        sqlx::query("SELECT id, title, completed, priority, created_at FROM todos WHERE id = ?1")
+            .bind(&id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch created todo: {}", e))?;
 
     Ok(Todo {
         id: row.get("id"),
@@ -156,15 +154,17 @@ pub async fn update_todo(request: UpdateTodoRequest) -> Result<Todo, String> {
     }
     query_builder = query_builder.bind(&request.id);
 
-    query_builder.execute(pool).await.map_err(|e| format!("Failed to update todo: {}", e))?;
+    query_builder
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update todo: {}", e))?;
 
-    let row = sqlx::query(
-        "SELECT id, title, completed, priority, created_at FROM todos WHERE id = ?1"
-    )
-    .bind(&request.id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch updated todo: {}", e))?;
+    let row =
+        sqlx::query("SELECT id, title, completed, priority, created_at FROM todos WHERE id = ?1")
+            .bind(&request.id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch updated todo: {}", e))?;
 
     Ok(Todo {
         id: row.get("id"),
@@ -191,12 +191,11 @@ pub async fn delete_todo(id: String) -> Result<(), String> {
 #[command]
 pub async fn get_projects() -> Result<Vec<Project>, String> {
     let pool = get_db_pool()?;
-    let rows = sqlx::query(
-        "SELECT id, title, deadline, progress, status FROM projects ORDER BY deadline"
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch projects: {}", e))?;
+    let rows =
+        sqlx::query("SELECT id, title, deadline, progress, status FROM projects ORDER BY deadline")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch projects: {}", e))?;
 
     let projects: Vec<Project> = rows
         .into_iter()
@@ -233,13 +232,12 @@ pub async fn create_project(request: CreateProjectRequest) -> Result<Project, St
     .await
     .map_err(|e| format!("Failed to create project: {}", e))?;
 
-    let row = sqlx::query(
-        "SELECT id, title, deadline, progress, status FROM projects WHERE id = ?1"
-    )
-    .bind(&id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch created project: {}", e))?;
+    let row =
+        sqlx::query("SELECT id, title, deadline, progress, status FROM projects WHERE id = ?1")
+            .bind(&id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch created project: {}", e))?;
 
     Ok(Project {
         id: row.get("id"),
@@ -299,15 +297,17 @@ pub async fn update_project(request: UpdateProjectRequest) -> Result<Project, St
     }
     query_builder = query_builder.bind(&request.id);
 
-    query_builder.execute(pool).await.map_err(|e| format!("Failed to update project: {}", e))?;
+    query_builder
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update project: {}", e))?;
 
-    let row = sqlx::query(
-        "SELECT id, title, deadline, progress, status FROM projects WHERE id = ?1"
-    )
-    .bind(&request.id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch updated project: {}", e))?;
+    let row =
+        sqlx::query("SELECT id, title, deadline, progress, status FROM projects WHERE id = ?1")
+            .bind(&request.id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch updated project: {}", e))?;
 
     Ok(Project {
         id: row.get("id"),
@@ -334,12 +334,10 @@ pub async fn delete_project(id: String) -> Result<(), String> {
 #[command]
 pub async fn get_events() -> Result<Vec<CalendarEvent>, String> {
     let pool = get_db_pool()?;
-    let rows = sqlx::query(
-        "SELECT id, title, date, color, note FROM events ORDER BY date"
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch events: {}", e))?;
+    let rows = sqlx::query("SELECT id, title, date, color, note FROM events ORDER BY date")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch events: {}", e))?;
 
     let events: Vec<CalendarEvent> = rows
         .into_iter()
@@ -358,13 +356,11 @@ pub async fn get_events() -> Result<Vec<CalendarEvent>, String> {
 #[command]
 pub async fn get_events_by_date(date: String) -> Result<Vec<CalendarEvent>, String> {
     let pool = get_db_pool()?;
-    let rows = sqlx::query(
-        "SELECT id, title, date, color, note FROM events WHERE date = ?1"
-    )
-    .bind(&date)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch events: {}", e))?;
+    let rows = sqlx::query("SELECT id, title, date, color, note FROM events WHERE date = ?1")
+        .bind(&date)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch events: {}", e))?;
 
     let events: Vec<CalendarEvent> = rows
         .into_iter()
@@ -396,25 +392,21 @@ pub async fn create_event(request: CreateEventRequest) -> Result<CalendarEvent, 
     let id = chrono::Utc::now().timestamp_millis().to_string();
     let color = request.color.unwrap_or_else(|| "blue".to_string());
 
-    sqlx::query(
-        "INSERT INTO events (id, title, date, color, note) VALUES (?1, ?2, ?3, ?4, ?5)"
-    )
-    .bind(&id)
-    .bind(&request.title)
-    .bind(&request.date)
-    .bind(&color)
-    .bind(&request.note)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create event: {}", e))?;
+    sqlx::query("INSERT INTO events (id, title, date, color, note) VALUES (?1, ?2, ?3, ?4, ?5)")
+        .bind(&id)
+        .bind(&request.title)
+        .bind(&request.date)
+        .bind(&color)
+        .bind(&request.note)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create event: {}", e))?;
 
-    let row = sqlx::query(
-        "SELECT id, title, date, color, note FROM events WHERE id = ?1"
-    )
-    .bind(&id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch created event: {}", e))?;
+    let row = sqlx::query("SELECT id, title, date, color, note FROM events WHERE id = ?1")
+        .bind(&id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch created event: {}", e))?;
 
     Ok(CalendarEvent {
         id: row.get("id"),
@@ -474,15 +466,16 @@ pub async fn update_event(request: UpdateEventRequest) -> Result<CalendarEvent, 
     }
     query_builder = query_builder.bind(&request.id);
 
-    query_builder.execute(pool).await.map_err(|e| format!("Failed to update event: {}", e))?;
+    query_builder
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update event: {}", e))?;
 
-    let row = sqlx::query(
-        "SELECT id, title, date, color, note FROM events WHERE id = ?1"
-    )
-    .bind(&request.id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch updated event: {}", e))?;
+    let row = sqlx::query("SELECT id, title, date, color, note FROM events WHERE id = ?1")
+        .bind(&request.id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch updated event: {}", e))?;
 
     Ok(CalendarEvent {
         id: row.get("id"),
@@ -510,7 +503,7 @@ pub async fn delete_event(id: String) -> Result<(), String> {
 pub async fn get_personal_tasks() -> Result<Vec<PersonalTask>, String> {
     let pool = get_db_pool()?;
     let rows = sqlx::query(
-        "SELECT id, title, budget, date, location, note FROM personal_tasks ORDER BY date"
+        "SELECT id, title, budget, date, location, note FROM personal_tasks ORDER BY date",
     )
     .fetch_all(pool)
     .await
@@ -545,7 +538,9 @@ pub struct CreatePersonalTaskRequest {
 }
 
 #[command]
-pub async fn create_personal_task(request: CreatePersonalTaskRequest) -> Result<PersonalTask, String> {
+pub async fn create_personal_task(
+    request: CreatePersonalTaskRequest,
+) -> Result<PersonalTask, String> {
     let pool = get_db_pool()?;
     let id = chrono::Utc::now().timestamp_millis().to_string();
 
@@ -563,7 +558,7 @@ pub async fn create_personal_task(request: CreatePersonalTaskRequest) -> Result<
     .map_err(|e| format!("Failed to create personal task: {}", e))?;
 
     let row = sqlx::query(
-        "SELECT id, title, budget, date, location, note FROM personal_tasks WHERE id = ?1"
+        "SELECT id, title, budget, date, location, note FROM personal_tasks WHERE id = ?1",
     )
     .bind(&id)
     .fetch_one(pool)
@@ -591,7 +586,9 @@ pub struct UpdatePersonalTaskRequest {
 }
 
 #[command]
-pub async fn update_personal_task(request: UpdatePersonalTaskRequest) -> Result<PersonalTask, String> {
+pub async fn update_personal_task(
+    request: UpdatePersonalTaskRequest,
+) -> Result<PersonalTask, String> {
     let pool = get_db_pool()?;
 
     let mut updates: Vec<String> = Vec::new();
@@ -616,7 +613,10 @@ pub async fn update_personal_task(request: UpdatePersonalTaskRequest) -> Result<
         return Err("No fields to update".to_string());
     }
 
-    let query = format!("UPDATE personal_tasks SET {} WHERE id = ?", updates.join(", "));
+    let query = format!(
+        "UPDATE personal_tasks SET {} WHERE id = ?",
+        updates.join(", ")
+    );
     let mut query_builder = sqlx::query(&query);
 
     if let Some(title) = &request.title {
@@ -636,10 +636,13 @@ pub async fn update_personal_task(request: UpdatePersonalTaskRequest) -> Result<
     }
     query_builder = query_builder.bind(&request.id);
 
-    query_builder.execute(pool).await.map_err(|e| format!("Failed to update personal task: {}", e))?;
+    query_builder
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update personal task: {}", e))?;
 
     let row = sqlx::query(
-        "SELECT id, title, budget, date, location, note FROM personal_tasks WHERE id = ?1"
+        "SELECT id, title, budget, date, location, note FROM personal_tasks WHERE id = ?1",
     )
     .bind(&request.id)
     .fetch_one(pool)
@@ -741,6 +744,117 @@ pub struct ReloadSkillsResponse {
     pub reloaded: usize,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloadToolingResponse {
+    pub mcp_servers: usize,
+    pub skills: usize,
+    pub commands: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub name: String,
+    #[serde(default = "default_stdio_transport")]
+    pub transport: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    pub cwd: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct McpServerFile {
+    servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillConfig {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub path: String,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommandConfig {
+    pub slug: String,
+    pub title: String,
+    pub description: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_insert_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub body: String,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolingConfig {
+    pub mcp_servers: Vec<McpServerConfig>,
+    pub skills: Vec<SkillConfig>,
+    pub commands: Vec<AgentCommandConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertMcpServerRequest {
+    pub server: McpServerConfig,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteMcpServerRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportSkillRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToggleSkillRequest {
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteSkillRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertCommandRequest {
+    pub command: AgentCommandConfig,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportCommandMarkdownRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteCommandRequest {
+    pub slug: String,
+}
+
 #[command]
 pub async fn agent_chat(request: AgentChatRequest) -> Result<AgentChatResponse, String> {
     let snapshot = build_context_snapshot().await?;
@@ -755,7 +869,9 @@ pub async fn agent_chat(request: AgentChatRequest) -> Result<AgentChatResponse, 
 }
 
 #[command]
-pub async fn agent_execute_action(request: AgentExecuteRequest) -> Result<AgentExecuteResponse, String> {
+pub async fn agent_execute_action(
+    request: AgentExecuteRequest,
+) -> Result<AgentExecuteResponse, String> {
     let pool = get_db_pool()?;
     let action = request.action;
     let result = match action.r#type.as_str() {
@@ -775,7 +891,10 @@ pub async fn agent_execute_action(request: AgentExecuteRequest) -> Result<AgentE
         "todo.update" => {
             let id = get_required_str(&action.payload, "id")?;
             let title = get_optional_str(&action.payload, "title");
-            let completed = action.payload.get("completed").and_then(|value| value.as_bool());
+            let completed = action
+                .payload
+                .get("completed")
+                .and_then(|value| value.as_bool());
             let priority = get_optional_str(&action.payload, "priority");
 
             if title.is_none() && completed.is_none() && priority.is_none() {
@@ -865,15 +984,17 @@ pub async fn agent_execute_action(request: AgentExecuteRequest) -> Result<AgentE
             let color = get_optional_str(&action.payload, "color").unwrap_or("blue");
             let note = get_optional_str(&action.payload, "note");
             let id = chrono::Utc::now().timestamp_millis().to_string();
-            sqlx::query("INSERT INTO events (id, title, date, color, note) VALUES (?1, ?2, ?3, ?4, ?5)")
-                .bind(&id)
-                .bind(title)
-                .bind(date)
-                .bind(color)
-                .bind(note)
-                .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to create event: {}", e))?;
+            sqlx::query(
+                "INSERT INTO events (id, title, date, color, note) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(&id)
+            .bind(title)
+            .bind(date)
+            .bind(color)
+            .bind(note)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to create event: {}", e))?;
             "日程已创建".to_string()
         }
         "event.update" => {
@@ -931,7 +1052,10 @@ pub async fn agent_execute_action(request: AgentExecuteRequest) -> Result<AgentE
         "personal.create" => {
             let title = get_required_str(&action.payload, "title")?;
             let id = chrono::Utc::now().timestamp_millis().to_string();
-            let budget = action.payload.get("budget").and_then(|value| value.as_f64());
+            let budget = action
+                .payload
+                .get("budget")
+                .and_then(|value| value.as_f64());
             let date = get_optional_str(&action.payload, "date");
             let location = get_optional_str(&action.payload, "location");
             let note = get_optional_str(&action.payload, "note");
@@ -952,11 +1076,18 @@ pub async fn agent_execute_action(request: AgentExecuteRequest) -> Result<AgentE
         "personal.update" => {
             let id = get_required_str(&action.payload, "id")?;
             let title = get_optional_str(&action.payload, "title");
-            let budget = action.payload.get("budget").and_then(|value| value.as_f64());
+            let budget = action
+                .payload
+                .get("budget")
+                .and_then(|value| value.as_f64());
             let date = get_optional_str(&action.payload, "date");
             let location = get_optional_str(&action.payload, "location");
             let note = get_optional_str(&action.payload, "note");
-            if title.is_none() && budget.is_none() && date.is_none() && location.is_none() && note.is_none()
+            if title.is_none()
+                && budget.is_none()
+                && date.is_none()
+                && location.is_none()
+                && note.is_none()
             {
                 return Err("personal.update 缺少可更新字段".to_string());
             }
@@ -976,7 +1107,10 @@ pub async fn agent_execute_action(request: AgentExecuteRequest) -> Result<AgentE
             if note.is_some() {
                 updates.push("note = ?".to_string());
             }
-            let query = format!("UPDATE personal_tasks SET {} WHERE id = ?", updates.join(", "));
+            let query = format!(
+                "UPDATE personal_tasks SET {} WHERE id = ?",
+                updates.join(", ")
+            );
             let mut query_builder = sqlx::query(&query);
             if let Some(value) = title {
                 query_builder = query_builder.bind(value);
@@ -1020,9 +1154,20 @@ pub async fn agent_execute_action(request: AgentExecuteRequest) -> Result<AgentE
 }
 
 #[command]
-pub async fn agent_list_capabilities() -> Result<AgentCapabilities, String> {
-    let skills = list_skill_ids();
-    let mcp_servers = list_mcp_server_names();
+pub async fn agent_list_capabilities(app: AppHandle) -> Result<AgentCapabilities, String> {
+    let tooling = load_tooling_config(&app)?;
+    let skills = tooling
+        .skills
+        .into_iter()
+        .filter(|item| item.enabled)
+        .map(|item| item.id)
+        .collect::<Vec<String>>();
+    let mcp_servers = tooling
+        .mcp_servers
+        .into_iter()
+        .filter(|item| item.enabled)
+        .map(|item| item.name)
+        .collect::<Vec<String>>();
     Ok(AgentCapabilities {
         builtin_tools: vec![
             "todo.create".to_string(),
@@ -1045,14 +1190,172 @@ pub async fn agent_list_capabilities() -> Result<AgentCapabilities, String> {
 }
 
 #[command]
-pub async fn agent_reload_skills() -> Result<ReloadSkillsResponse, String> {
-    let reloaded = list_skill_ids().len();
+pub async fn agent_reload_skills(app: AppHandle) -> Result<ReloadSkillsResponse, String> {
+    let reloaded = load_tooling_config(&app)?.skills.len();
     Ok(ReloadSkillsResponse { reloaded })
 }
 
 #[command]
-pub async fn agent_list_mcp_servers() -> Result<Vec<String>, String> {
-    Ok(list_mcp_server_names())
+pub async fn agent_list_mcp_servers(app: AppHandle) -> Result<Vec<String>, String> {
+    Ok(load_tooling_config(&app)?
+        .mcp_servers
+        .into_iter()
+        .filter(|item| item.enabled)
+        .map(|item| item.name)
+        .collect::<Vec<String>>())
+}
+
+#[command]
+pub async fn agent_get_tooling_config(app: AppHandle) -> Result<AgentToolingConfig, String> {
+    load_tooling_config(&app)
+}
+
+#[command]
+pub async fn agent_reload_tooling(app: AppHandle) -> Result<ReloadToolingResponse, String> {
+    let tooling = load_tooling_config(&app)?;
+    Ok(ReloadToolingResponse {
+        mcp_servers: tooling.mcp_servers.len(),
+        skills: tooling.skills.len(),
+        commands: tooling.commands.len(),
+    })
+}
+
+#[command]
+pub async fn agent_upsert_mcp_server(
+    app: AppHandle,
+    request: UpsertMcpServerRequest,
+) -> Result<(), String> {
+    validate_mcp_server(&request.server)?;
+    let mut servers = load_user_mcp_servers(&app)?;
+    let key = request.server.name.to_lowercase();
+    if let Some(index) = servers
+        .iter()
+        .position(|item| item.name.to_lowercase() == key)
+    {
+        servers[index] = request.server;
+    } else {
+        servers.push(request.server);
+    }
+    write_user_mcp_servers(&app, &servers)
+}
+
+#[command]
+pub async fn agent_delete_mcp_server(
+    app: AppHandle,
+    request: DeleteMcpServerRequest,
+) -> Result<(), String> {
+    let mut servers = load_user_mcp_servers(&app)?;
+    servers.retain(|item| item.name != request.name);
+    write_user_mcp_servers(&app, &servers)
+}
+
+#[command]
+pub async fn agent_import_skill(
+    app: AppHandle,
+    request: ImportSkillRequest,
+) -> Result<SkillConfig, String> {
+    let src = PathBuf::from(request.path);
+    if !src.exists() || !src.is_dir() {
+        return Err("Skill path does not exist or is not a directory".to_string());
+    }
+
+    let skill = read_skill_manifest(&src, "user")?;
+    let user_skills_root = ensure_user_skills_dir(&app)?;
+    let dst = user_skills_root.join(&skill.id);
+    if dst.exists() {
+        fs::remove_dir_all(&dst).map_err(|e| format!("Failed to replace skill: {}", e))?;
+    }
+    copy_dir_recursive(&src, &dst)?;
+    read_skill_manifest(&dst, "user")
+}
+
+#[command]
+pub async fn agent_toggle_skill(app: AppHandle, request: ToggleSkillRequest) -> Result<(), String> {
+    let user_skills_root = ensure_user_skills_dir(&app)?;
+    let manifest_path = user_skills_root.join(&request.id).join("manifest.json");
+    if !manifest_path.exists() {
+        return Err("Only imported user skills can be toggled".to_string());
+    }
+    let content = fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("Failed to read skill manifest: {}", e))?;
+    let mut manifest: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse skill manifest: {}", e))?;
+    manifest["enabled"] = Value::Bool(request.enabled);
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest)
+            .map_err(|e| format!("Failed to serialize skill manifest: {}", e))?,
+    )
+    .map_err(|e| format!("Failed to write skill manifest: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub async fn agent_delete_skill(app: AppHandle, request: DeleteSkillRequest) -> Result<(), String> {
+    let user_skills_root = ensure_user_skills_dir(&app)?;
+    let dir = user_skills_root.join(request.id);
+    if dir.exists() {
+        fs::remove_dir_all(dir).map_err(|e| format!("Failed to delete skill: {}", e))?;
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn agent_list_commands(app: AppHandle) -> Result<Vec<AgentCommandConfig>, String> {
+    Ok(load_tooling_config(&app)?.commands)
+}
+
+#[command]
+pub async fn agent_upsert_command(
+    app: AppHandle,
+    request: UpsertCommandRequest,
+) -> Result<(), String> {
+    validate_agent_command(&request.command)?;
+    let user_commands_root = ensure_user_commands_dir(&app)?;
+    let file_name = format!("{}.md", sanitize_slug(&request.command.slug));
+    let command_file = user_commands_root.join(file_name);
+    fs::write(command_file, build_command_markdown(&request.command))
+        .map_err(|e| format!("Failed to write command file: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub async fn agent_import_command_markdown(
+    app: AppHandle,
+    request: ImportCommandMarkdownRequest,
+) -> Result<AgentCommandConfig, String> {
+    let src_path = PathBuf::from(request.path);
+    if !src_path.exists() {
+        return Err("Command markdown path does not exist".to_string());
+    }
+    if src_path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+        return Err("Only .md command files are supported".to_string());
+    }
+    let mut parsed = parse_command_markdown(&src_path, "user")?;
+    parsed.source = "user".to_string();
+    validate_agent_command(&parsed)?;
+
+    let user_commands_root = ensure_user_commands_dir(&app)?;
+    let file_name = format!("{}.md", sanitize_slug(&parsed.slug));
+    let command_file = user_commands_root.join(file_name);
+    fs::write(command_file, build_command_markdown(&parsed))
+        .map_err(|e| format!("Failed to write imported command file: {}", e))?;
+    Ok(parsed)
+}
+
+#[command]
+pub async fn agent_delete_command(
+    app: AppHandle,
+    request: DeleteCommandRequest,
+) -> Result<(), String> {
+    let user_commands_root = ensure_user_commands_dir(&app)?;
+    let file_name = format!("{}.md", sanitize_slug(&request.slug));
+    let command_file = user_commands_root.join(file_name);
+    if command_file.exists() {
+        fs::remove_file(command_file)
+            .map_err(|e| format!("Failed to delete command file: {}", e))?;
+    }
+    Ok(())
 }
 
 fn get_required_str<'a>(payload: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -1082,15 +1385,18 @@ async fn build_context_snapshot() -> Result<Value, String> {
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to fetch projects snapshot: {}", e))?;
-    let today_events = sqlx::query("SELECT id, title, date, color, note FROM events WHERE date = ?1 ORDER BY date LIMIT 10")
-        .bind(&today)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch events snapshot: {}", e))?;
-    let personal_tasks = sqlx::query("SELECT id, title, date, budget FROM personal_tasks ORDER BY date LIMIT 8")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch personal snapshot: {}", e))?;
+    let today_events = sqlx::query(
+        "SELECT id, title, date, color, note FROM events WHERE date = ?1 ORDER BY date LIMIT 10",
+    )
+    .bind(&today)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch events snapshot: {}", e))?;
+    let personal_tasks =
+        sqlx::query("SELECT id, title, date, budget FROM personal_tasks ORDER BY date LIMIT 8")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch personal snapshot: {}", e))?;
 
     Ok(json!({
         "today": today,
@@ -1150,7 +1456,10 @@ fn local_fallback_response(
     );
 
     if let Some(reason) = error {
-        reply.push_str(&format!(" 模型服务暂不可用（{}），已切换为本地建议模式。", reason));
+        reply.push_str(&format!(
+            " 模型服务暂不可用（{}），已切换为本地建议模式。",
+            reason
+        ));
     }
 
     AgentChatResponse {
@@ -1166,7 +1475,10 @@ fn local_fallback_response(
     }
 }
 
-async fn call_provider(request: &AgentChatRequest, snapshot: &Value) -> Result<AgentChatResponse, String> {
+async fn call_provider(
+    request: &AgentChatRequest,
+    snapshot: &Value,
+) -> Result<AgentChatResponse, String> {
     let provider = request.settings.provider.as_str();
     match provider {
         "openai" => call_openai(request, snapshot).await,
@@ -1176,16 +1488,16 @@ async fn call_provider(request: &AgentChatRequest, snapshot: &Value) -> Result<A
     }
 }
 
-async fn call_openai(request: &AgentChatRequest, snapshot: &Value) -> Result<AgentChatResponse, String> {
+async fn call_openai(
+    request: &AgentChatRequest,
+    snapshot: &Value,
+) -> Result<AgentChatResponse, String> {
     let config = &request.settings.openai;
     if config.api_key.trim().is_empty() {
         return Err("OpenAI API key is empty".to_string());
     }
 
-    let endpoint = format!(
-        "{}/chat/completions",
-        config.base_url.trim_end_matches('/')
-    );
+    let endpoint = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
 
     let messages = request
         .messages
@@ -1242,7 +1554,10 @@ async fn call_openai(request: &AgentChatRequest, snapshot: &Value) -> Result<Age
     parse_llm_response(content)
 }
 
-async fn call_anthropic(request: &AgentChatRequest, snapshot: &Value) -> Result<AgentChatResponse, String> {
+async fn call_anthropic(
+    request: &AgentChatRequest,
+    snapshot: &Value,
+) -> Result<AgentChatResponse, String> {
     let config = &request.settings.anthropic;
     if config.api_key.trim().is_empty() {
         return Err("Anthropic API key is empty".to_string());
@@ -1312,7 +1627,10 @@ async fn call_anthropic(request: &AgentChatRequest, snapshot: &Value) -> Result<
     parse_llm_response(content)
 }
 
-async fn call_minimax(request: &AgentChatRequest, snapshot: &Value) -> Result<AgentChatResponse, String> {
+async fn call_minimax(
+    request: &AgentChatRequest,
+    snapshot: &Value,
+) -> Result<AgentChatResponse, String> {
     let config = &request.settings.minimax;
     if config.api_key.trim().is_empty() {
         return Err("MiniMax API key is empty".to_string());
@@ -1438,7 +1756,90 @@ fn extract_json_block(content: &str) -> String {
     content.trim().to_string()
 }
 
-fn list_skill_ids() -> Vec<String> {
+fn default_true() -> bool {
+    true
+}
+
+fn default_stdio_transport() -> String {
+    "stdio".to_string()
+}
+
+fn default_insert_mode() -> String {
+    "insert".to_string()
+}
+
+fn get_user_agent_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?
+        .join("agent");
+    fs::create_dir_all(&root).map_err(|e| format!("Failed to create agent app data dir: {}", e))?;
+    Ok(root)
+}
+
+fn ensure_user_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = get_user_agent_root(app)?.join("skills");
+    fs::create_dir_all(&path).map_err(|e| format!("Failed to create skills dir: {}", e))?;
+    Ok(path)
+}
+
+fn ensure_user_mcp_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = get_user_agent_root(app)?.join("mcp");
+    fs::create_dir_all(&path).map_err(|e| format!("Failed to create mcp dir: {}", e))?;
+    Ok(path)
+}
+
+fn ensure_user_commands_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = get_user_agent_root(app)?.join("commands");
+    fs::create_dir_all(&path).map_err(|e| format!("Failed to create commands dir: {}", e))?;
+    Ok(path)
+}
+
+fn load_tooling_config(app: &AppHandle) -> Result<AgentToolingConfig, String> {
+    let mut mcp_map: HashMap<String, McpServerConfig> = HashMap::new();
+    for item in load_builtin_mcp_servers() {
+        mcp_map.insert(item.name.to_lowercase(), item);
+    }
+    for item in load_user_mcp_servers(app)? {
+        mcp_map.insert(item.name.to_lowercase(), item);
+    }
+
+    let mut skill_map: HashMap<String, SkillConfig> = HashMap::new();
+    for item in load_builtin_skills() {
+        skill_map.insert(item.id.clone(), item);
+    }
+    for item in load_user_skills(app)? {
+        skill_map.insert(item.id.clone(), item);
+    }
+
+    let mut command_map: HashMap<String, AgentCommandConfig> = HashMap::new();
+    for item in load_builtin_commands() {
+        command_map.insert(item.slug.clone(), item);
+    }
+    for item in load_user_commands(app)? {
+        command_map.insert(item.slug.clone(), item);
+    }
+
+    let mut mcp_servers = mcp_map.into_values().collect::<Vec<McpServerConfig>>();
+    mcp_servers.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut skills = skill_map.into_values().collect::<Vec<SkillConfig>>();
+    skills.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut commands = command_map
+        .into_values()
+        .collect::<Vec<AgentCommandConfig>>();
+    commands.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+    Ok(AgentToolingConfig {
+        mcp_servers,
+        skills,
+        commands,
+    })
+}
+
+fn load_builtin_skills() -> Vec<SkillConfig> {
     let Some(skill_root) = resolve_first_existing_path(&[
         "agent/skills",
         "../agent/skills",
@@ -1447,19 +1848,73 @@ fn list_skill_ids() -> Vec<String> {
     ]) else {
         return vec![];
     };
+    load_skills_from_dir(&skill_root, "builtin")
+}
 
-    let Ok(entries) = fs::read_dir(skill_root) else {
+fn load_user_skills(app: &AppHandle) -> Result<Vec<SkillConfig>, String> {
+    let root = ensure_user_skills_dir(app)?;
+    Ok(load_skills_from_dir(&root, "user"))
+}
+
+fn load_skills_from_dir(root: &Path, source: &str) -> Vec<SkillConfig> {
+    let Ok(entries) = fs::read_dir(root) else {
         return vec![];
     };
-
     entries
         .filter_map(Result::ok)
         .filter(|entry| entry.path().is_dir())
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect::<Vec<String>>()
+        .filter_map(|entry| read_skill_manifest(&entry.path(), source).ok())
+        .collect::<Vec<SkillConfig>>()
 }
 
-fn list_mcp_server_names() -> Vec<String> {
+fn read_skill_manifest(path: &Path, source: &str) -> Result<SkillConfig, String> {
+    let manifest_path = path.join("manifest.json");
+    let content = fs::read_to_string(&manifest_path).map_err(|e| {
+        format!(
+            "Failed to read manifest at {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    let value: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse manifest json: {}", e))?;
+    let id = value
+        .get("id")
+        .and_then(|item| item.as_str())
+        .ok_or("Skill manifest missing id".to_string())?
+        .to_string();
+    let name = value
+        .get("name")
+        .and_then(|item| item.as_str())
+        .unwrap_or(&id)
+        .to_string();
+    let description = value
+        .get("description")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_string();
+    let version = value
+        .get("version")
+        .and_then(|item| item.as_str())
+        .unwrap_or("0.1.0")
+        .to_string();
+    let enabled = value
+        .get("enabled")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(true);
+
+    Ok(SkillConfig {
+        id,
+        name,
+        description,
+        version,
+        enabled,
+        path: path.to_string_lossy().to_string(),
+        source: source.to_string(),
+    })
+}
+
+fn load_builtin_mcp_servers() -> Vec<McpServerConfig> {
     let Some(config_path) = resolve_first_existing_path(&[
         "agent/mcp/servers.json",
         "../agent/mcp/servers.json",
@@ -1468,24 +1923,234 @@ fn list_mcp_server_names() -> Vec<String> {
     ]) else {
         return vec![];
     };
+    read_mcp_servers_from_path(&config_path).unwrap_or_default()
+}
 
-    let Ok(content) = fs::read_to_string(config_path) else {
+fn load_user_mcp_servers(app: &AppHandle) -> Result<Vec<McpServerConfig>, String> {
+    let config_path = ensure_user_mcp_dir(app)?.join("servers.json");
+    if !config_path.exists() {
+        return Ok(vec![]);
+    }
+    read_mcp_servers_from_path(&config_path)
+}
+
+fn read_mcp_servers_from_path(path: &Path) -> Result<Vec<McpServerConfig>, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read MCP config {}: {}", path.display(), e))?;
+    let parsed: McpServerFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse MCP config {}: {}", path.display(), e))?;
+    Ok(parsed.servers)
+}
+
+fn write_user_mcp_servers(app: &AppHandle, servers: &[McpServerConfig]) -> Result<(), String> {
+    let config_path = ensure_user_mcp_dir(app)?.join("servers.json");
+    let data = McpServerFile {
+        servers: servers.to_vec(),
+    };
+    fs::write(
+        config_path,
+        serde_json::to_string_pretty(&data)
+            .map_err(|e| format!("Failed to serialize MCP config: {}", e))?,
+    )
+    .map_err(|e| format!("Failed to write MCP config: {}", e))?;
+    Ok(())
+}
+
+fn load_builtin_commands() -> Vec<AgentCommandConfig> {
+    let Some(commands_root) = resolve_first_existing_path(&[
+        "agent/commands",
+        "../agent/commands",
+        "../../agent/commands",
+        "app/agent/commands",
+    ]) else {
         return vec![];
     };
-    let Ok(json_value) = serde_json::from_str::<Value>(&content) else {
+    load_commands_from_dir(&commands_root, "builtin")
+}
+
+fn load_user_commands(app: &AppHandle) -> Result<Vec<AgentCommandConfig>, String> {
+    let root = ensure_user_commands_dir(app)?;
+    Ok(load_commands_from_dir(&root, "user"))
+}
+
+fn load_commands_from_dir(root: &Path, source: &str) -> Vec<AgentCommandConfig> {
+    let Ok(entries) = fs::read_dir(root) else {
         return vec![];
     };
-    json_value
-        .get("servers")
-        .and_then(|value| value.as_array())
-        .map(|servers| {
-            servers
-                .iter()
-                .filter_map(|item| item.get("name").and_then(|name| name.as_str()))
-                .map(|name| name.to_string())
-                .collect::<Vec<String>>()
-        })
-        .unwrap_or_default()
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+        .filter_map(|path| parse_command_markdown(&path, source).ok())
+        .collect::<Vec<AgentCommandConfig>>()
+}
+
+fn parse_command_markdown(path: &Path, source: &str) -> Result<AgentCommandConfig, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read command file {}: {}", path.display(), e))?;
+    let (frontmatter, body) = split_frontmatter(&content)?;
+
+    let slug = frontmatter.get("slug").cloned().unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|item| item.to_str())
+            .unwrap_or("command")
+            .to_string()
+    });
+    let title = frontmatter
+        .get("title")
+        .cloned()
+        .unwrap_or_else(|| slug.clone());
+    let description = frontmatter.get("description").cloned().unwrap_or_default();
+    let enabled = frontmatter
+        .get("enabled")
+        .map(|value| value == "true")
+        .unwrap_or(true);
+    let mode = frontmatter
+        .get("mode")
+        .cloned()
+        .unwrap_or_else(default_insert_mode);
+    let tags = parse_frontmatter_list(frontmatter.get("tags"));
+    let aliases = parse_frontmatter_list(frontmatter.get("aliases"));
+
+    let command = AgentCommandConfig {
+        slug: sanitize_slug(&slug),
+        title,
+        description,
+        enabled,
+        mode,
+        tags,
+        aliases,
+        body: body.trim().to_string(),
+        source: source.to_string(),
+    };
+    validate_agent_command(&command)?;
+    Ok(command)
+}
+
+fn split_frontmatter(content: &str) -> Result<(HashMap<String, String>, String), String> {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---\n") {
+        return Ok((HashMap::new(), trimmed.to_string()));
+    }
+    let rest = &trimmed[4..];
+    let Some(end_idx) = rest.find("\n---\n") else {
+        return Ok((HashMap::new(), trimmed.to_string()));
+    };
+    let frontmatter_block = &rest[..end_idx];
+    let body = &rest[end_idx + 5..];
+    let mut map = HashMap::new();
+    for line in frontmatter_block.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        map.insert(k.trim().to_string(), v.trim().trim_matches('"').to_string());
+    }
+    Ok((map, body.to_string()))
+}
+
+fn parse_frontmatter_list(input: Option<&String>) -> Vec<String> {
+    let Some(raw) = input else {
+        return vec![];
+    };
+    let raw = raw.trim();
+    if !raw.starts_with('[') || !raw.ends_with(']') {
+        return vec![];
+    }
+    raw[1..raw.len() - 1]
+        .split(',')
+        .map(|item| item.trim().trim_matches('"').to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<String>>()
+}
+
+fn build_command_markdown(command: &AgentCommandConfig) -> String {
+    format!(
+        "---\nslug: {}\ntitle: \"{}\"\ndescription: \"{}\"\nenabled: {}\nmode: {}\ntags: [{}]\naliases: [{}]\n---\n\n{}\n",
+        sanitize_slug(&command.slug),
+        command.title.replace('"', "\\\""),
+        command.description.replace('"', "\\\""),
+        if command.enabled { "true" } else { "false" },
+        command.mode,
+        command
+            .tags
+            .iter()
+            .map(|item| format!("\"{}\"", item.replace('"', "\\\"")))
+            .collect::<Vec<String>>()
+            .join(", "),
+        command
+            .aliases
+            .iter()
+            .map(|item| format!("\"{}\"", item.replace('"', "\\\"")))
+            .collect::<Vec<String>>()
+            .join(", "),
+        command.body
+    )
+}
+
+fn sanitize_slug(slug: &str) -> String {
+    slug.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+        .collect::<String>()
+        .trim_matches('_')
+        .trim_matches('-')
+        .to_lowercase()
+}
+
+fn validate_mcp_server(server: &McpServerConfig) -> Result<(), String> {
+    if server.name.trim().is_empty() {
+        return Err("MCP server name cannot be empty".to_string());
+    }
+    if server.transport != "stdio" {
+        return Err("Only stdio transport is supported in this version".to_string());
+    }
+    if server.command.trim().is_empty() {
+        return Err("MCP server command cannot be empty".to_string());
+    }
+    Ok(())
+}
+
+fn validate_agent_command(command: &AgentCommandConfig) -> Result<(), String> {
+    if sanitize_slug(&command.slug).is_empty() {
+        return Err("Command slug is invalid".to_string());
+    }
+    if command.title.trim().is_empty() {
+        return Err("Command title cannot be empty".to_string());
+    }
+    if command.body.trim().is_empty() {
+        return Err("Command body cannot be empty".to_string());
+    }
+    if command.mode != "insert" && command.mode != "execute" {
+        return Err("Command mode must be insert or execute".to_string());
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("Failed to create skill directory: {}", e))?;
+    let entries =
+        fs::read_dir(src).map_err(|e| format!("Failed to read skill source dir: {}", e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read skill entry: {}", e))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path).map_err(|e| {
+                format!(
+                    "Failed to copy skill file {} -> {}: {}",
+                    src_path.display(),
+                    dst_path.display(),
+                    e
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_first_existing_path(candidates: &[&str]) -> Option<PathBuf> {
