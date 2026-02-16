@@ -46,7 +46,9 @@ pub fn init_database(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::E
 }
 
 pub fn get_db_pool() -> Result<&'static SqlitePool, String> {
-    DB_POOL.get().ok_or_else(|| "Database not initialized".to_string())
+    DB_POOL
+        .get()
+        .ok_or_else(|| "Database not initialized".to_string())
 }
 
 async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -105,6 +107,55 @@ async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             date TEXT,
             location TEXT,
             note TEXT
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            user_message TEXT,
+            reply TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS agent_events (
+            id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            message TEXT NOT NULL,
+            meta_json TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS agent_action_audits (
+            id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            action_id TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            before_state_json TEXT,
+            after_state_json TEXT,
+            success INTEGER NOT NULL,
+            error_message TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         "#,
     )

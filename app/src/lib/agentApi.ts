@@ -4,6 +4,9 @@ import type {
   AgentCapabilities,
   AgentChatRequest,
   AgentChatResponse,
+  AgentCodexHealth,
+  AgentExecuteActionsRequest,
+  AgentExecuteActionsResponse,
   AgentExecuteRequest,
   AgentExecuteResponse,
   AgentToolingConfig,
@@ -17,6 +20,12 @@ export async function agentChat(request: AgentChatRequest): Promise<AgentChatRes
 
 export async function agentExecuteAction(request: AgentExecuteRequest): Promise<AgentExecuteResponse> {
   return invoke('agent_execute_action', { request });
+}
+
+export async function agentExecuteActionsAtomic(
+  request: AgentExecuteActionsRequest
+): Promise<AgentExecuteActionsResponse> {
+  return invoke('agent_execute_actions_atomic', { request });
 }
 
 export async function agentListCapabilities(): Promise<AgentCapabilities> {
@@ -73,4 +82,8 @@ export async function agentImportCommandMarkdown(path: string): Promise<AgentCom
 
 export async function agentDeleteCommand(slug: string): Promise<void> {
   return invoke('agent_delete_command', { request: { slug } });
+}
+
+export async function agentCodexHealth(request: AgentChatRequest): Promise<AgentCodexHealth> {
+  return invoke('agent_codex_health', { request });
 }

@@ -44,6 +44,7 @@ fn main() {
             // Agent commands
             commands::agent_chat,
             commands::agent_execute_action,
+            commands::agent_execute_actions_atomic,
             commands::agent_list_capabilities,
             commands::agent_reload_skills,
             commands::agent_list_mcp_servers,
@@ -58,6 +59,7 @@ fn main() {
             commands::agent_upsert_command,
             commands::agent_import_command_markdown,
             commands::agent_delete_command,
+            commands::agent_codex_health,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
