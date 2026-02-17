@@ -41,6 +41,16 @@ fn main() {
             commands::create_personal_task,
             commands::update_personal_task,
             commands::delete_personal_task,
+            // Daily info center commands
+            commands::get_info_sources,
+            commands::upsert_info_source,
+            commands::delete_info_source,
+            commands::get_info_settings,
+            commands::update_info_settings,
+            commands::get_today_info_items,
+            commands::refresh_info_now,
+            commands::get_info_refresh_status,
+            commands::open_external_link,
             // Agent commands
             commands::agent_chat,
             commands::agent_execute_action,

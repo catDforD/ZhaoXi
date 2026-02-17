@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,61 @@ pub struct PersonalTask {
     pub date: Option<String>,
     pub location: Option<String>,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoSource {
+    pub id: String,
+    pub name: String,
+    pub r#type: String,
+    pub url: String,
+    pub enabled: bool,
+    pub is_preset: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoSettings {
+    pub push_time: String,
+    pub include_keywords: Vec<String>,
+    pub exclude_keywords: Vec<String>,
+    pub max_items_per_day: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoItem {
+    pub id: String,
+    pub source_id: String,
+    pub title: String,
+    pub link: String,
+    pub summary: Option<String>,
+    pub published_at: Option<String>,
+    pub score: f64,
+    pub matched_keywords: Vec<String>,
+    pub fetched_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoRefreshResponse {
+    pub success: bool,
+    pub fetched_count: i32,
+    pub kept_count: i32,
+    pub message: String,
+    pub refreshed_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoRefreshStatus {
+    pub last_refresh_at: Option<String>,
+    pub last_success: bool,
+    pub message: String,
+    pub today_count: i64,
 }
 
 // ============= Todo Commands =============
@@ -674,6 +730,247 @@ pub async fn delete_personal_task(id: String) -> Result<(), String> {
     Ok(())
 }
 
+// ============= Daily Info Center Commands =============
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertInfoSourceRequest {
+    pub id: Option<String>,
+    pub name: String,
+    pub url: String,
+    #[serde(default = "default_info_source_type")]
+    pub r#type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub is_preset: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfoSettingsRequest {
+    pub push_time: String,
+    #[serde(default)]
+    pub include_keywords: Vec<String>,
+    #[serde(default)]
+    pub exclude_keywords: Vec<String>,
+    pub max_items_per_day: i32,
+}
+
+#[command]
+pub async fn get_info_sources() -> Result<Vec<InfoSource>, String> {
+    let pool = get_db_pool()?;
+    let rows = sqlx::query(
+        "SELECT id, name, type, url, enabled, is_preset, created_at, updated_at
+         FROM info_sources
+         ORDER BY is_preset DESC, created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch info sources: {}", e))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| InfoSource {
+            id: row.get("id"),
+            name: row.get("name"),
+            r#type: row.get("type"),
+            url: row.get("url"),
+            enabled: row.get::<i32, _>("enabled") != 0,
+            is_preset: row.get::<i32, _>("is_preset") != 0,
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        })
+        .collect())
+}
+
+#[command]
+pub async fn upsert_info_source(request: UpsertInfoSourceRequest) -> Result<InfoSource, String> {
+    let pool = get_db_pool()?;
+    let source_id = request
+        .id
+        .clone()
+        .unwrap_or_else(|| format!("source-{}", chrono::Utc::now().timestamp_millis()));
+    let source_type = if request.r#type.trim().is_empty() {
+        "rss".to_string()
+    } else {
+        request.r#type.trim().to_lowercase()
+    };
+
+    sqlx::query(
+        "INSERT INTO info_sources (id, name, type, url, enabled, is_preset, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+         ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            type = excluded.type,
+            url = excluded.url,
+            enabled = excluded.enabled,
+            updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind(&source_id)
+    .bind(request.name.trim())
+    .bind(&source_type)
+    .bind(request.url.trim())
+    .bind(if request.enabled { 1 } else { 0 })
+    .bind(if request.is_preset { 1 } else { 0 })
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to upsert info source: {}", e))?;
+
+    let row = sqlx::query(
+        "SELECT id, name, type, url, enabled, is_preset, created_at, updated_at
+         FROM info_sources WHERE id = ?1",
+    )
+    .bind(&source_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch updated source: {}", e))?;
+
+    Ok(InfoSource {
+        id: row.get("id"),
+        name: row.get("name"),
+        r#type: row.get("type"),
+        url: row.get("url"),
+        enabled: row.get::<i32, _>("enabled") != 0,
+        is_preset: row.get::<i32, _>("is_preset") != 0,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+#[command]
+pub async fn delete_info_source(id: String) -> Result<(), String> {
+    let pool = get_db_pool()?;
+    sqlx::query("DELETE FROM info_sources WHERE id = ?1")
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete info source: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub async fn get_info_settings() -> Result<InfoSettings, String> {
+    load_info_settings().await
+}
+
+#[command]
+pub async fn update_info_settings(
+    request: UpdateInfoSettingsRequest,
+) -> Result<InfoSettings, String> {
+    let pool = get_db_pool()?;
+    let include_keywords_json =
+        serde_json::to_string(&normalize_keywords(request.include_keywords)).map_err(|e| {
+            format!(
+                "Failed to serialize include keywords for info settings: {}",
+                e
+            )
+        })?;
+    let exclude_keywords_json =
+        serde_json::to_string(&normalize_keywords(request.exclude_keywords)).map_err(|e| {
+            format!(
+                "Failed to serialize exclude keywords for info settings: {}",
+                e
+            )
+        })?;
+    let max_items_per_day = request.max_items_per_day.clamp(1, 100);
+    let push_time = normalize_push_time(&request.push_time);
+
+    sqlx::query(
+        "INSERT INTO info_settings (id, push_time, include_keywords_json, exclude_keywords_json, max_items_per_day, updated_at)
+         VALUES ('default', ?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)
+         ON CONFLICT(id) DO UPDATE SET
+            push_time = excluded.push_time,
+            include_keywords_json = excluded.include_keywords_json,
+            exclude_keywords_json = excluded.exclude_keywords_json,
+            max_items_per_day = excluded.max_items_per_day,
+            updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind(&push_time)
+    .bind(include_keywords_json)
+    .bind(exclude_keywords_json)
+    .bind(max_items_per_day)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update info settings: {}", e))?;
+
+    load_info_settings().await
+}
+
+#[command]
+pub async fn get_today_info_items() -> Result<Vec<InfoItem>, String> {
+    let pool = get_db_pool()?;
+    let date = local_today_string();
+    let rows = sqlx::query(
+        "SELECT id, source_id, title, link, summary, published_at, score, matched_keywords_json, fetched_at
+         FROM info_items_daily
+         WHERE date = ?1
+         ORDER BY score DESC, fetched_at DESC",
+    )
+    .bind(&date)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch today info items: {}", e))?;
+
+    Ok(rows
+        .into_iter()
+        .map(row_to_info_item)
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+#[command]
+pub async fn refresh_info_now() -> Result<InfoRefreshResponse, String> {
+    refresh_info_with_trigger("manual").await
+}
+
+#[command]
+pub async fn get_info_refresh_status() -> Result<InfoRefreshStatus, String> {
+    let pool = get_db_pool()?;
+    let date = local_today_string();
+    let today_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM info_items_daily WHERE date = ?1")
+            .bind(&date)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to count today info items: {}", e))?;
+
+    let log_row = sqlx::query(
+        "SELECT success, message, created_at
+         FROM info_refresh_logs
+         ORDER BY created_at DESC
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch refresh status: {}", e))?;
+
+    if let Some(row) = log_row {
+        return Ok(InfoRefreshStatus {
+            last_refresh_at: row.get("created_at"),
+            last_success: row.get::<i32, _>("success") != 0,
+            message: row.get::<String, _>("message"),
+            today_count,
+        });
+    }
+
+    Ok(InfoRefreshStatus {
+        last_refresh_at: None,
+        last_success: true,
+        message: "尚未刷新".to_string(),
+        today_count,
+    })
+}
+
+#[command]
+pub async fn open_external_link(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err("Only http/https links are allowed".to_string());
+    }
+    webbrowser::open(trimmed).map_err(|e| format!("Failed to open link: {}", e))?;
+    Ok(())
+}
+
 // ============= Agent Commands =============
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1017,13 +1314,7 @@ pub async fn agent_chat(
                 "模型服务调用失败，准备降级",
                 Some(json!({ "reason": error.clone(), "retryable": true })),
             );
-            emit_agent_event(
-                &app,
-                &request_id,
-                "fallback",
-                "已切换为本地建议模式",
-                None,
-            );
+            emit_agent_event(&app, &request_id, "fallback", "已切换为本地建议模式", None);
             let response = local_fallback_response(&request.messages, &snapshot, Some(error));
             persist_agent_session(
                 &request_id,
@@ -2750,6 +3041,341 @@ async fn persist_audit_records(records: &[AgentExecutionAuditRecord]) {
         .execute(pool)
         .await;
     }
+}
+
+async fn load_info_settings() -> Result<InfoSettings, String> {
+    let pool = get_db_pool()?;
+    let row = sqlx::query(
+        "SELECT push_time, include_keywords_json, exclude_keywords_json, max_items_per_day
+         FROM info_settings
+         WHERE id = 'default'
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to query info settings: {}", e))?;
+
+    if let Some(row) = row {
+        let include_keywords = parse_keywords_json(row.get("include_keywords_json"))?;
+        let exclude_keywords = parse_keywords_json(row.get("exclude_keywords_json"))?;
+        return Ok(InfoSettings {
+            push_time: normalize_push_time(&row.get::<String, _>("push_time")),
+            include_keywords,
+            exclude_keywords,
+            max_items_per_day: row.get::<i32, _>("max_items_per_day").clamp(1, 100),
+        });
+    }
+
+    Ok(InfoSettings {
+        push_time: "09:00".to_string(),
+        include_keywords: vec![],
+        exclude_keywords: vec![],
+        max_items_per_day: 20,
+    })
+}
+
+async fn refresh_info_with_trigger(trigger_type: &str) -> Result<InfoRefreshResponse, String> {
+    let pool = get_db_pool()?;
+    let settings = load_info_settings().await?;
+    let sources = get_info_sources().await?;
+    let enabled_sources: Vec<InfoSource> = sources
+        .into_iter()
+        .filter(|source| source.enabled)
+        .collect();
+    let refreshed_at = chrono::Local::now().to_rfc3339();
+    let today = local_today_string();
+
+    sqlx::query("DELETE FROM info_items_daily WHERE date != ?1")
+        .bind(&today)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to cleanup stale info items: {}", e))?;
+
+    if enabled_sources.is_empty() {
+        let message = "没有启用的信息源".to_string();
+        insert_info_refresh_log(trigger_type, true, &message, 0, 0).await;
+        return Ok(InfoRefreshResponse {
+            success: true,
+            fetched_count: 0,
+            kept_count: 0,
+            message,
+            refreshed_at,
+        });
+    }
+
+    let mut fetched_count = 0;
+    let mut link_seen = HashSet::new();
+    let mut aggregate: HashMap<String, InfoItem> = HashMap::new();
+    let mut errors = Vec::new();
+
+    for source in enabled_sources {
+        match fetch_source_items(&source, &settings).await {
+            Ok(items) => {
+                fetched_count += items.len() as i32;
+                for item in items {
+                    if !link_seen.insert(item.link.clone()) {
+                        if let Some(existing) = aggregate.get_mut(&item.link) {
+                            if item.score > existing.score {
+                                *existing = item;
+                            }
+                        }
+                        continue;
+                    }
+                    aggregate.insert(item.link.clone(), item);
+                }
+            }
+            Err(error) => {
+                errors.push(format!("{}: {}", source.name, error));
+            }
+        }
+    }
+
+    let mut final_items: Vec<InfoItem> = aggregate.into_values().collect();
+    final_items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+    final_items.truncate(settings.max_items_per_day as usize);
+
+    sqlx::query("DELETE FROM info_items_daily WHERE date = ?1")
+        .bind(&today)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clear current day info items: {}", e))?;
+
+    for (index, item) in final_items.iter().enumerate() {
+        let matched_keywords_json = serde_json::to_string(&item.matched_keywords)
+            .map_err(|e| format!("Failed to serialize matched keywords: {}", e))?;
+        sqlx::query(
+            "INSERT INTO info_items_daily
+             (id, date, source_id, title, link, summary, published_at, score, matched_keywords_json, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind(format!("info-{}-{}", chrono::Utc::now().timestamp_millis(), index))
+        .bind(&today)
+        .bind(&item.source_id)
+        .bind(&item.title)
+        .bind(&item.link)
+        .bind(&item.summary)
+        .bind(&item.published_at)
+        .bind(item.score)
+        .bind(matched_keywords_json)
+        .bind(&item.fetched_at)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to store info item: {}", e))?;
+    }
+
+    let success = errors.is_empty();
+    let message = if success {
+        format!("已更新 {} 条信息", final_items.len())
+    } else {
+        format!(
+            "已更新 {} 条信息，{} 个信息源失败",
+            final_items.len(),
+            errors.len()
+        )
+    };
+    insert_info_refresh_log(
+        trigger_type,
+        success,
+        &format!(
+            "{}{}",
+            message,
+            if errors.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", errors.join("; "))
+            }
+        ),
+        fetched_count,
+        final_items.len() as i32,
+    )
+    .await;
+
+    Ok(InfoRefreshResponse {
+        success,
+        fetched_count,
+        kept_count: final_items.len() as i32,
+        message,
+        refreshed_at,
+    })
+}
+
+async fn fetch_source_items(
+    source: &InfoSource,
+    settings: &InfoSettings,
+) -> Result<Vec<InfoItem>, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&source.url)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("读取响应失败: {}", e))?;
+    let feed =
+        feed_rs::parser::parse(bytes.as_ref()).map_err(|e| format!("解析 RSS/Atom 失败: {}", e))?;
+
+    let include = normalize_keywords(settings.include_keywords.clone());
+    let exclude = normalize_keywords(settings.exclude_keywords.clone());
+    let now = chrono::Utc::now();
+    let fetched_at = chrono::Local::now().to_rfc3339();
+    let mut items = Vec::new();
+
+    for (index, entry) in feed.entries.into_iter().enumerate() {
+        let title = entry
+            .title
+            .as_ref()
+            .map(|item| item.content.trim().to_string())
+            .unwrap_or_default();
+        if title.is_empty() {
+            continue;
+        }
+        let summary = entry
+            .summary
+            .as_ref()
+            .map(|item| item.content.trim().to_string());
+        let link = entry
+            .links
+            .first()
+            .map(|item| item.href.clone())
+            .unwrap_or_default();
+        if link.is_empty() {
+            continue;
+        }
+
+        let haystack = format!(
+            "{} {}",
+            title.to_lowercase(),
+            summary.clone().unwrap_or_default().to_lowercase()
+        );
+        if exclude.iter().any(|keyword| haystack.contains(keyword)) {
+            continue;
+        }
+
+        let matched_keywords = if include.is_empty() {
+            Vec::new()
+        } else {
+            include
+                .iter()
+                .filter(|keyword| haystack.contains(keyword.as_str()))
+                .cloned()
+                .collect::<Vec<String>>()
+        };
+        if !include.is_empty() && matched_keywords.is_empty() {
+            continue;
+        }
+
+        let published_at = entry
+            .published
+            .or(entry.updated)
+            .map(|item| item.to_rfc3339());
+        let mut score = matched_keywords.len() as f64;
+        if let Some(published) = entry.published.or(entry.updated) {
+            let hours = (now - published.with_timezone(&chrono::Utc)).num_hours();
+            if hours <= 24 {
+                score += 1.0;
+            } else if hours <= 72 {
+                score += 0.5;
+            }
+        }
+        if include.is_empty() {
+            score += 0.1;
+        }
+
+        items.push(InfoItem {
+            id: format!("temp-{}-{}", source.id, index),
+            source_id: source.id.clone(),
+            title,
+            link,
+            summary,
+            published_at,
+            score,
+            matched_keywords,
+            fetched_at: fetched_at.clone(),
+        });
+    }
+
+    Ok(items)
+}
+
+fn row_to_info_item(row: sqlx::sqlite::SqliteRow) -> Result<InfoItem, String> {
+    let matched_keywords = parse_keywords_json(row.get("matched_keywords_json"))?;
+    Ok(InfoItem {
+        id: row.get("id"),
+        source_id: row.get("source_id"),
+        title: row.get("title"),
+        link: row.get("link"),
+        summary: row.get("summary"),
+        published_at: row.get("published_at"),
+        score: row.get("score"),
+        matched_keywords,
+        fetched_at: row.get("fetched_at"),
+    })
+}
+
+fn parse_keywords_json(raw: String) -> Result<Vec<String>, String> {
+    serde_json::from_str::<Vec<String>>(&raw)
+        .map(normalize_keywords)
+        .map_err(|e| format!("Failed to parse keywords json: {}", e))
+}
+
+fn normalize_keywords(keywords: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    keywords
+        .into_iter()
+        .map(|item| item.trim().to_lowercase())
+        .filter(|item| !item.is_empty())
+        .filter(|item| seen.insert(item.clone()))
+        .collect()
+}
+
+fn normalize_push_time(input: &str) -> String {
+    let trimmed = input.trim();
+    if let Some((h_raw, m_raw)) = trimmed.split_once(':') {
+        let hour = h_raw.parse::<u32>().unwrap_or(9).min(23);
+        let minute = m_raw.parse::<u32>().unwrap_or(0).min(59);
+        return format!("{:02}:{:02}", hour, minute);
+    }
+    "09:00".to_string()
+}
+
+fn local_today_string() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn default_info_source_type() -> String {
+    "rss".to_string()
+}
+
+async fn insert_info_refresh_log(
+    trigger_type: &str,
+    success: bool,
+    message: &str,
+    fetched_count: i32,
+    kept_count: i32,
+) {
+    let Ok(pool) = get_db_pool() else {
+        return;
+    };
+    let _ = sqlx::query(
+        "INSERT INTO info_refresh_logs (id, trigger_type, success, message, fetched_count, kept_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(format!(
+        "info-log-{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ))
+    .bind(trigger_type)
+    .bind(if success { 1 } else { 0 })
+    .bind(message)
+    .bind(fetched_count)
+    .bind(kept_count)
+    .execute(pool)
+    .await;
 }
 
 fn default_true() -> bool {

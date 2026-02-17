@@ -42,6 +42,51 @@ export interface HotItem {
   heat: string;
 }
 
+export interface InfoSource {
+  id: string;
+  name: string;
+  type: 'rss';
+  url: string;
+  enabled: boolean;
+  isPreset: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface InfoSettings {
+  pushTime: string;
+  includeKeywords: string[];
+  excludeKeywords: string[];
+  maxItemsPerDay: number;
+}
+
+export interface InfoItem {
+  id: string;
+  sourceId: string;
+  title: string;
+  link: string;
+  summary?: string;
+  publishedAt?: string;
+  score: number;
+  matchedKeywords: string[];
+  fetchedAt: string;
+}
+
+export interface InfoRefreshResponse {
+  success: boolean;
+  fetchedCount: number;
+  keptCount: number;
+  message: string;
+  refreshedAt: string;
+}
+
+export interface InfoRefreshStatus {
+  lastRefreshAt?: string;
+  lastSuccess: boolean;
+  message: string;
+  todayCount: number;
+}
+
 // 天气数据
 export interface WeatherData {
   temperature: number;

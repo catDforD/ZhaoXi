@@ -115,6 +115,74 @@ async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     sqlx::query(
         r#"
+        CREATE TABLE IF NOT EXISTS info_sources (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'rss',
+            url TEXT NOT NULL UNIQUE,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            is_preset INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS info_settings (
+            id TEXT PRIMARY KEY,
+            push_time TEXT NOT NULL DEFAULT '09:00',
+            include_keywords_json TEXT NOT NULL DEFAULT '[]',
+            exclude_keywords_json TEXT NOT NULL DEFAULT '[]',
+            max_items_per_day INTEGER NOT NULL DEFAULT 20,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS info_items_daily (
+            id TEXT PRIMARY KEY,
+            date TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            link TEXT NOT NULL,
+            summary TEXT,
+            published_at TEXT,
+            score REAL NOT NULL DEFAULT 0,
+            matched_keywords_json TEXT NOT NULL DEFAULT '[]',
+            fetched_at TEXT NOT NULL,
+            UNIQUE(date, link)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS info_refresh_logs (
+            id TEXT PRIMARY KEY,
+            trigger_type TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            fetched_count INTEGER NOT NULL DEFAULT 0,
+            kept_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS agent_sessions (
             id TEXT PRIMARY KEY,
             request_id TEXT NOT NULL,
@@ -193,6 +261,36 @@ async fn insert_default_data(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             r#"
             INSERT INTO projects (id, title, deadline, progress, status) VALUES
             ('1', '资料整理', '2025-12-31', 20, 'active')
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO info_settings (id, push_time, include_keywords_json, exclude_keywords_json, max_items_per_day)
+        VALUES ('default', '09:00', '[]', '[]', 20)
+        ON CONFLICT(id) DO NOTHING
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    let info_source_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM info_sources")
+        .fetch_one(pool)
+        .await?;
+
+    if info_source_count == 0 {
+        sqlx::query(
+            r#"
+            INSERT INTO info_sources (id, name, type, url, enabled, is_preset) VALUES
+            ('preset-36kr', '36氪快讯', 'rss', 'https://36kr.com/feed', 1, 1),
+            ('preset-huxiu', '虎嗅', 'rss', 'https://www.huxiu.com/rss/0.xml', 1, 1),
+            ('preset-infoq', 'InfoQ 中文', 'rss', 'https://www.infoq.cn/feed', 1, 1),
+            ('preset-geekpark', '极客公园', 'rss', 'https://www.geekpark.net/rss', 1, 1),
+            ('preset-v2ex', 'V2EX 热点', 'rss', 'https://www.v2ex.com/index.xml', 1, 1),
+            ('preset-juejin', '掘金', 'rss', 'https://juejin.cn/rss', 1, 1)
             "#,
         )
         .execute(pool)

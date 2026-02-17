@@ -1,5 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Todo, Project, CalendarEvent, PersonalTask } from '@/types';
+import type {
+  Todo,
+  Project,
+  CalendarEvent,
+  PersonalTask,
+  InfoSource,
+  InfoSettings,
+  InfoItem,
+  InfoRefreshResponse,
+  InfoRefreshStatus,
+} from '@/types';
 
 // ============= Todo API =============
 
@@ -118,4 +128,58 @@ export async function updatePersonalTask(request: UpdatePersonalTaskRequest): Pr
 
 export async function deletePersonalTask(id: string): Promise<void> {
   return invoke('delete_personal_task', { id });
+}
+
+// ============= Daily Info Center API =============
+
+export interface UpsertInfoSourceRequest {
+  id?: string;
+  name: string;
+  url: string;
+  type: 'rss';
+  enabled: boolean;
+  isPreset?: boolean;
+}
+
+export interface UpdateInfoSettingsRequest {
+  pushTime: string;
+  includeKeywords: string[];
+  excludeKeywords: string[];
+  maxItemsPerDay: number;
+}
+
+export async function getInfoSources(): Promise<InfoSource[]> {
+  return invoke('get_info_sources');
+}
+
+export async function upsertInfoSource(request: UpsertInfoSourceRequest): Promise<InfoSource> {
+  return invoke('upsert_info_source', { request });
+}
+
+export async function deleteInfoSource(id: string): Promise<void> {
+  return invoke('delete_info_source', { id });
+}
+
+export async function getInfoSettings(): Promise<InfoSettings> {
+  return invoke('get_info_settings');
+}
+
+export async function updateInfoSettings(request: UpdateInfoSettingsRequest): Promise<InfoSettings> {
+  return invoke('update_info_settings', { request });
+}
+
+export async function getTodayInfoItems(): Promise<InfoItem[]> {
+  return invoke('get_today_info_items');
+}
+
+export async function refreshInfoNow(): Promise<InfoRefreshResponse> {
+  return invoke('refresh_info_now');
+}
+
+export async function getInfoRefreshStatus(): Promise<InfoRefreshStatus> {
+  return invoke('get_info_refresh_status');
+}
+
+export async function openExternalLink(url: string): Promise<void> {
+  return invoke('open_external_link', { url });
 }

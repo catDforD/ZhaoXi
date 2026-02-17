@@ -4,9 +4,9 @@ import { Button } from '@/components/ui/button';
 import { useAppStore } from '@/stores/appStore';
 import { DynamicIcon } from '@/components/features/DynamicIcon';
 import type { UserApp } from '@/types';
-import { open } from '@tauri-apps/plugin-shell';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { appDataDir, resolve } from '@tauri-apps/api/path';
+import { openExternalLink } from '@/lib/api';
 
 interface AppContainerProps {
   appId: string;
@@ -86,7 +86,7 @@ export function AppContainer({ appId }: AppContainerProps) {
   const handleOpenExternal = async () => {
     if (app?.url) {
       try {
-        await open(app.url);
+        await openExternalLink(app.url);
       } catch (error) {
         console.error('Failed to open external URL:', error);
         window.open(app.url, '_blank');
