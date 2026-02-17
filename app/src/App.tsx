@@ -5,6 +5,7 @@ import { TodoPage } from '@/pages/TodoPage';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 import { PersonalPage } from '@/pages/PersonalPage';
 import { SchedulePage } from '@/pages/SchedulePage';
+import { InspirationPage } from '@/pages/InspirationPage';
 import { JournalPage } from '@/pages/JournalPage';
 import { AchievementsPage } from '@/pages/AchievementsPage';
 import { AppsPage } from '@/pages/AppsPage';
@@ -54,6 +55,8 @@ function App() {
         return <PersonalPage />;
       case 'schedule':
         return <SchedulePage />;
+      case 'inspiration':
+        return <InspirationPage />;
       case 'journal':
         return <JournalPage />;
       case 'achievements':

@@ -35,6 +35,14 @@ export interface PersonalTask {
   note?: string;
 }
 
+export interface Inspiration {
+  id: string;
+  content: string;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // 热榜项
 export interface HotItem {
   rank: number;

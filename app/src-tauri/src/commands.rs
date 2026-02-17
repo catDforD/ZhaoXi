@@ -55,6 +55,16 @@ pub struct PersonalTask {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct Inspiration {
+    pub id: String,
+    pub content: String,
+    pub is_archived: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct InfoSource {
     pub id: String,
     pub name: String,
@@ -727,6 +737,144 @@ pub async fn delete_personal_task(id: String) -> Result<(), String> {
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to delete personal task: {}", e))?;
+    Ok(())
+}
+
+// ============= Inspiration Commands =============
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInspirationRequest {
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleInspirationArchivedRequest {
+    pub id: String,
+    pub is_archived: bool,
+}
+
+#[command]
+pub async fn get_inspirations(include_archived: Option<bool>) -> Result<Vec<Inspiration>, String> {
+    let pool = get_db_pool()?;
+    let show_archived = include_archived.unwrap_or(true);
+
+    let rows = if show_archived {
+        sqlx::query(
+            "SELECT id, content, is_archived, created_at, updated_at
+             FROM inspirations
+             ORDER BY created_at DESC",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch inspirations: {}", e))?
+    } else {
+        sqlx::query(
+            "SELECT id, content, is_archived, created_at, updated_at
+             FROM inspirations
+             WHERE is_archived = 0
+             ORDER BY created_at DESC",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch inspirations: {}", e))?
+    };
+
+    Ok(rows
+        .into_iter()
+        .map(|row| Inspiration {
+            id: row.get("id"),
+            content: row.get("content"),
+            is_archived: row.get::<i32, _>("is_archived") != 0,
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        })
+        .collect())
+}
+
+#[command]
+pub async fn create_inspiration(request: CreateInspirationRequest) -> Result<Inspiration, String> {
+    let pool = get_db_pool()?;
+    let content = request.content.trim();
+    if content.is_empty() {
+        return Err("Inspiration content cannot be empty".to_string());
+    }
+    let id = chrono::Utc::now().timestamp_millis().to_string();
+
+    sqlx::query(
+        "INSERT INTO inspirations (id, content, is_archived, created_at, updated_at)
+         VALUES (?1, ?2, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    )
+    .bind(&id)
+    .bind(content)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to create inspiration: {}", e))?;
+
+    let row = sqlx::query(
+        "SELECT id, content, is_archived, created_at, updated_at
+         FROM inspirations
+         WHERE id = ?1",
+    )
+    .bind(&id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch created inspiration: {}", e))?;
+
+    Ok(Inspiration {
+        id: row.get("id"),
+        content: row.get("content"),
+        is_archived: row.get::<i32, _>("is_archived") != 0,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+#[command]
+pub async fn toggle_inspiration_archived(
+    request: ToggleInspirationArchivedRequest,
+) -> Result<Inspiration, String> {
+    let pool = get_db_pool()?;
+
+    sqlx::query(
+        "UPDATE inspirations
+         SET is_archived = ?1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?2",
+    )
+    .bind(if request.is_archived { 1 } else { 0 })
+    .bind(&request.id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update inspiration status: {}", e))?;
+
+    let row = sqlx::query(
+        "SELECT id, content, is_archived, created_at, updated_at
+         FROM inspirations
+         WHERE id = ?1",
+    )
+    .bind(&request.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch updated inspiration: {}", e))?;
+
+    Ok(Inspiration {
+        id: row.get("id"),
+        content: row.get("content"),
+        is_archived: row.get::<i32, _>("is_archived") != 0,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+#[command]
+pub async fn delete_inspiration(id: String) -> Result<(), String> {
+    let pool = get_db_pool()?;
+    sqlx::query("DELETE FROM inspirations WHERE id = ?1")
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete inspiration: {}", e))?;
     Ok(())
 }
 

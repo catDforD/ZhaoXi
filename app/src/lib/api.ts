@@ -4,6 +4,7 @@ import type {
   Project,
   CalendarEvent,
   PersonalTask,
+  Inspiration,
   InfoSource,
   InfoSettings,
   InfoItem,
@@ -128,6 +129,36 @@ export async function updatePersonalTask(request: UpdatePersonalTaskRequest): Pr
 
 export async function deletePersonalTask(id: string): Promise<void> {
   return invoke('delete_personal_task', { id });
+}
+
+// ============= Inspiration API =============
+
+export async function getInspirations(includeArchived: boolean = true): Promise<Inspiration[]> {
+  return invoke('get_inspirations', { includeArchived });
+}
+
+export interface CreateInspirationRequest {
+  content: string;
+}
+
+export async function createInspiration(content: string): Promise<Inspiration> {
+  const request: CreateInspirationRequest = { content };
+  return invoke('create_inspiration', { request });
+}
+
+export interface ToggleInspirationArchivedRequest {
+  id: string;
+  isArchived: boolean;
+}
+
+export async function toggleInspirationArchived(
+  request: ToggleInspirationArchivedRequest
+): Promise<Inspiration> {
+  return invoke('toggle_inspiration_archived', { request });
+}
+
+export async function deleteInspiration(id: string): Promise<void> {
+  return invoke('delete_inspiration', { id });
 }
 
 // ============= Daily Info Center API =============

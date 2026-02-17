@@ -41,6 +41,11 @@ fn main() {
             commands::create_personal_task,
             commands::update_personal_task,
             commands::delete_personal_task,
+            // Inspiration commands
+            commands::get_inspirations,
+            commands::create_inspiration,
+            commands::toggle_inspiration_archived,
+            commands::delete_inspiration,
             // Daily info center commands
             commands::get_info_sources,
             commands::upsert_info_source,

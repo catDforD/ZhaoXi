@@ -6,6 +6,7 @@ import type {
   Project,
   CalendarEvent,
   PersonalTask,
+  Inspiration,
   HotItem,
   WeatherData,
   MoodType,
@@ -24,10 +25,11 @@ const DEFAULT_BUILTIN_SIDEBAR_ITEMS: SidebarItem[] = [
   { id: 'projects', type: 'builtin', enabled: true, order: 2 },
   { id: 'personal', type: 'builtin', enabled: true, order: 3 },
   { id: 'schedule', type: 'builtin', enabled: true, order: 4 },
-  { id: 'journal', type: 'builtin', enabled: true, order: 5 },
-  { id: 'achievements', type: 'builtin', enabled: true, order: 6 },
-  { id: 'apps', type: 'builtin', enabled: true, order: 7 },
-  { id: 'agent', type: 'builtin', enabled: true, order: 8 },
+  { id: 'inspiration', type: 'builtin', enabled: true, order: 5 },
+  { id: 'journal', type: 'builtin', enabled: true, order: 6 },
+  { id: 'achievements', type: 'builtin', enabled: true, order: 7 },
+  { id: 'apps', type: 'builtin', enabled: true, order: 8 },
+  { id: 'agent', type: 'builtin', enabled: true, order: 9 },
 ];
 
 function ensureBuiltinSidebarItems(items: SidebarItem[]): SidebarItem[] {
@@ -78,6 +80,14 @@ interface AppState {
   fetchPersonalTasks: () => Promise<void>;
   addPersonalTask: (task: Omit<PersonalTask, 'id'>) => Promise<void>;
   deletePersonalTask: (id: string) => Promise<void>;
+
+  // 灵感记录
+  inspirations: Inspiration[];
+  isLoadingInspirations: boolean;
+  fetchInspirations: (includeArchived?: boolean) => Promise<void>;
+  addInspiration: (content: string) => Promise<void>;
+  toggleInspirationArchived: (id: string, isArchived: boolean) => Promise<void>;
+  deleteInspiration: (id: string) => Promise<void>;
 
   // 热榜数据
   hotList: HotItem[];
@@ -334,6 +344,59 @@ export const useAppStore = create<AppState>()(
         }
       },
 
+      // 灵感记录
+      inspirations: [],
+      isLoadingInspirations: false,
+      fetchInspirations: async (includeArchived = true) => {
+        set({ isLoadingInspirations: true });
+        try {
+          const inspirations = await api.getInspirations(includeArchived);
+          set({ inspirations });
+        } catch (error) {
+          console.error('Failed to fetch inspirations:', error);
+        } finally {
+          set({ isLoadingInspirations: false });
+        }
+      },
+      addInspiration: async (content) => {
+        const trimmed = content.trim();
+        if (!trimmed) {
+          toast.error('请输入灵感内容');
+          return;
+        }
+        try {
+          const newInspiration = await api.createInspiration(trimmed);
+          set((state) => ({ inspirations: [newInspiration, ...state.inspirations] }));
+        } catch (error) {
+          console.error('Failed to add inspiration:', error);
+          toast.error('新增灵感失败');
+        }
+      },
+      toggleInspirationArchived: async (id, isArchived) => {
+        try {
+          const updated = await api.toggleInspirationArchived({ id, isArchived });
+          set((state) => ({
+            inspirations: state.inspirations.map((item) =>
+              item.id === id ? updated : item
+            ),
+          }));
+        } catch (error) {
+          console.error('Failed to update inspiration archive status:', error);
+          toast.error('更新灵感状态失败');
+        }
+      },
+      deleteInspiration: async (id) => {
+        try {
+          await api.deleteInspiration(id);
+          set((state) => ({
+            inspirations: state.inspirations.filter((item) => item.id !== id),
+          }));
+        } catch (error) {
+          console.error('Failed to delete inspiration:', error);
+          toast.error('删除灵感失败');
+        }
+      },
+
       // 热榜数据
       hotList: [
         { rank: 1, title: '北冥有鱼竟然是真的', heat: '1145万热度' },
@@ -524,6 +587,7 @@ export const useAppStore = create<AppState>()(
           state.fetchProjects(),
           state.fetchEvents(),
           state.fetchPersonalTasks(),
+          state.fetchInspirations(false),
         ]);
 
         // 初始化侧边栏配置（如果还没有）
