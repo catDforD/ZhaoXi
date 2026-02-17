@@ -10,6 +10,7 @@ import type {
   InfoItem,
   InfoRefreshResponse,
   InfoRefreshStatus,
+  WeatherData,
 } from '@/types';
 
 // ============= Todo API =============
@@ -213,4 +214,33 @@ export async function getInfoRefreshStatus(): Promise<InfoRefreshStatus> {
 
 export async function openExternalLink(url: string): Promise<void> {
   return invoke('open_external_link', { url });
+}
+
+// ============= Weather API =============
+
+export interface GeocodeCityRequest {
+  city: string;
+}
+
+export interface GeocodeCityResponse {
+  city: string;
+  lat: number;
+  lon: number;
+  country?: string;
+  timezone?: string;
+}
+
+export interface GetCurrentWeatherRequest {
+  lat: number;
+  lon: number;
+  city: string;
+  locationName?: string;
+}
+
+export async function geocodeCity(request: GeocodeCityRequest): Promise<GeocodeCityResponse> {
+  return invoke('geocode_city', { request });
+}
+
+export async function getCurrentWeather(request: GetCurrentWeatherRequest): Promise<WeatherData> {
+  return invoke('get_current_weather', { request });
 }

@@ -118,6 +118,165 @@ pub struct InfoRefreshStatus {
     pub today_count: i64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeocodeCityRequest {
+    pub city: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GeocodeCityResponse {
+    pub city: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub country: Option<String>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetCurrentWeatherRequest {
+    pub lat: f64,
+    pub lon: f64,
+    pub city: String,
+    pub location_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WeatherData {
+    pub temperature: i32,
+    pub condition: String,
+    pub humidity: i32,
+    pub wind_level: String,
+    pub city: String,
+    pub updated_at: String,
+    pub source: String,
+    pub location_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoGeocodingResponse {
+    results: Option<Vec<OpenMeteoGeocodingItem>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoGeocodingItem {
+    name: String,
+    latitude: f64,
+    longitude: f64,
+    country: Option<String>,
+    timezone: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoForecastResponse {
+    current: OpenMeteoCurrent,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoCurrent {
+    temperature_2m: f64,
+    relative_humidity_2m: f64,
+    wind_speed_10m: f64,
+    weather_code: i32,
+}
+
+// ============= Weather Commands =============
+
+#[command]
+pub async fn geocode_city(request: GeocodeCityRequest) -> Result<GeocodeCityResponse, String> {
+    let city = request.city.trim();
+    if city.is_empty() {
+        return Err("城市名称不能为空".to_string());
+    }
+
+    let endpoint = "https://geocoding-api.open-meteo.com/v1/search";
+    let client = reqwest::Client::new();
+    let response = client
+        .get(endpoint)
+        .query(&[
+            ("name", city),
+            ("count", "1"),
+            ("language", "zh"),
+            ("format", "json"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("地理编码请求失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("地理编码服务异常: HTTP {}", response.status()));
+    }
+
+    let payload = response
+        .json::<OpenMeteoGeocodingResponse>()
+        .await
+        .map_err(|e| format!("地理编码响应解析失败: {}", e))?;
+
+    let result = payload
+        .results
+        .and_then(|items| items.into_iter().next())
+        .ok_or_else(|| "未找到匹配城市".to_string())?;
+
+    Ok(GeocodeCityResponse {
+        city: result.name,
+        lat: result.latitude,
+        lon: result.longitude,
+        country: result.country,
+        timezone: result.timezone,
+    })
+}
+
+#[command]
+pub async fn get_current_weather(request: GetCurrentWeatherRequest) -> Result<WeatherData, String> {
+    let city = request.city.trim();
+    if city.is_empty() {
+        return Err("城市名称不能为空".to_string());
+    }
+
+    let endpoint = "https://api.open-meteo.com/v1/forecast";
+    let client = reqwest::Client::new();
+    let response = client
+        .get(endpoint)
+        .query(&[
+            ("latitude", request.lat.to_string()),
+            ("longitude", request.lon.to_string()),
+            (
+                "current",
+                "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code".to_string(),
+            ),
+            ("forecast_days", "1".to_string()),
+            ("timezone", "auto".to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("天气请求失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("天气服务异常: HTTP {}", response.status()));
+    }
+
+    let payload = response
+        .json::<OpenMeteoForecastResponse>()
+        .await
+        .map_err(|e| format!("天气响应解析失败: {}", e))?;
+
+    Ok(WeatherData {
+        temperature: payload.current.temperature_2m.round() as i32,
+        humidity: payload.current.relative_humidity_2m.round() as i32,
+        wind_level: wind_speed_to_level(payload.current.wind_speed_10m),
+        condition: weather_code_to_condition(payload.current.weather_code).to_string(),
+        city: city.to_string(),
+        updated_at: chrono::Local::now().to_rfc3339(),
+        source: "open-meteo".to_string(),
+        location_name: request
+            .location_name
+            .unwrap_or_else(|| city.to_string()),
+    })
+}
+
 // ============= Todo Commands =============
 
 #[command]
@@ -3489,6 +3648,49 @@ fn normalize_push_time(input: &str) -> String {
         return format!("{:02}:{:02}", hour, minute);
     }
     "09:00".to_string()
+}
+
+fn weather_code_to_condition(code: i32) -> &'static str {
+    match code {
+        0 => "clear",
+        1 | 2 | 3 => "cloudy",
+        45 | 48 => "fog",
+        51 | 53 | 55 | 56 | 57 | 61 | 63 | 65 | 66 | 67 | 80 | 81 | 82 => "rain",
+        71 | 73 | 75 | 77 | 85 | 86 => "snow",
+        95 | 96 | 99 => "thunder",
+        _ => "unknown",
+    }
+}
+
+fn wind_speed_to_level(speed_ms: f64) -> String {
+    let level = if speed_ms < 0.3 {
+        0
+    } else if speed_ms < 1.6 {
+        1
+    } else if speed_ms < 3.4 {
+        2
+    } else if speed_ms < 5.5 {
+        3
+    } else if speed_ms < 8.0 {
+        4
+    } else if speed_ms < 10.8 {
+        5
+    } else if speed_ms < 13.9 {
+        6
+    } else if speed_ms < 17.2 {
+        7
+    } else if speed_ms < 20.8 {
+        8
+    } else if speed_ms < 24.5 {
+        9
+    } else if speed_ms < 28.5 {
+        10
+    } else if speed_ms < 32.7 {
+        11
+    } else {
+        12
+    };
+    format!("{}级", level)
 }
 
 fn local_today_string() -> String {

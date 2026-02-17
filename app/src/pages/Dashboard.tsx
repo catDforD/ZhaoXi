@@ -1,4 +1,5 @@
 import { useAppStore } from '@/stores/appStore';
+import { useState } from 'react';
 import { GlassCard } from '@/components/layout/GlassCard';
 import { StatCard } from '@/components/features/StatCard';
 import { TodoItem } from '@/components/features/TodoItem';
@@ -8,15 +9,39 @@ import {
   User, 
   Cloud, 
   Calendar,
-  CheckSquare
+  CheckSquare,
+  RefreshCw,
+  Settings
 } from 'lucide-react';
 import { format, addDays, getDay } from 'date-fns';
 import { cn } from '@/lib/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 export function Dashboard() {
-  const { todos, toggleTodo, events, weather, projects, personalTasks, setCurrentPage } = useAppStore();
+  const {
+    todos,
+    toggleTodo,
+    events,
+    weather,
+    weatherStatus,
+    weatherSettings,
+    fetchWeather,
+    updateWeatherCity,
+    projects,
+    personalTasks,
+    setCurrentPage,
+  } = useAppStore();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [cityInput, setCityInput] = useState(weatherSettings.city);
 
   const incompleteTodos = todos.filter((t) => !t.completed).slice(0, 3);
 
@@ -59,19 +84,74 @@ export function Dashboard() {
           />
         </button>
         <GlassCard className="p-5" hover>
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center">
-              <Cloud className="w-6 h-6 text-blue-400" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-white">
-                {weather ? `${weather.temperature}°C` : 'Loading...'}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                <Cloud className="w-6 h-6 text-blue-400" />
               </div>
-              <div className="text-sm text-white/50">今日天气</div>
+              <div>
+                <div className="text-2xl font-bold text-white">
+                  {weather ? `${weather.temperature}°C` : weatherStatus === 'loading' ? '加载中...' : '--'}
+                </div>
+                <div className="text-sm text-white/50">
+                  {weatherStatus === 'error' ? '天气暂不可用' : weather?.locationName ?? '今日天气'}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void fetchWeather(true)}
+                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+                title="刷新天气"
+              >
+                <RefreshCw className="w-4 h-4 text-white/60" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCityInput(weatherSettings.city);
+                  setSettingsOpen(true);
+                }}
+                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+                title="设置城市"
+              >
+                <Settings className="w-4 h-4 text-white/60" />
+              </button>
             </div>
           </div>
         </GlassCard>
       </div>
+
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="sm:max-w-md glass-card border-white/10 text-white">
+          <DialogHeader>
+            <DialogTitle>设置天气城市</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Input
+              value={cityInput}
+              onChange={(event) => setCityInput(event.target.value)}
+              placeholder="例如：保定、北京、上海"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setSettingsOpen(false)}>
+                取消
+              </Button>
+              <Button
+                onClick={async () => {
+                  const updated = await updateWeatherCity(cityInput);
+                  if (updated) {
+                    setSettingsOpen(false);
+                  }
+                }}
+              >
+                保存并刷新
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Main Content */}
       <div className="grid grid-cols-3 gap-6">

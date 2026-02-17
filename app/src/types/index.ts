@@ -95,13 +95,32 @@ export interface InfoRefreshStatus {
   todayCount: number;
 }
 
+export type WeatherCondition =
+  | 'clear'
+  | 'cloudy'
+  | 'rain'
+  | 'snow'
+  | 'fog'
+  | 'thunder'
+  | 'unknown';
+
 // 天气数据
 export interface WeatherData {
   temperature: number;
-  condition: string;
+  condition: WeatherCondition;
   humidity: number;
   windLevel: string;
   city: string;
+  updatedAt: string;
+  source: 'open-meteo';
+  locationName: string;
+}
+
+export interface WeatherSettings {
+  city: string;
+  lat: number;
+  lon: number;
+  cacheMinutes: number;
 }
 
 // 心情类型

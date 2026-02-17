@@ -9,6 +9,7 @@ import type {
   Inspiration,
   HotItem,
   WeatherData,
+  WeatherSettings,
   MoodType,
   DailyChallenge,
   WishlistItem,
@@ -42,6 +43,25 @@ function ensureBuiltinSidebarItems(items: SidebarItem[]): SidebarItem[] {
   return merged
     .sort((a, b) => a.order - b.order)
     .map((item, index) => ({ ...item, order: index }));
+}
+
+const DEFAULT_WEATHER_SETTINGS: WeatherSettings = {
+  city: '保定市',
+  lat: 38.874,
+  lon: 115.4646,
+  cacheMinutes: 30,
+};
+
+function isWeatherCacheValid(weather: WeatherData | null, cacheMinutes: number): boolean {
+  if (!weather?.updatedAt) {
+    return false;
+  }
+  const updatedAtMs = Date.parse(weather.updatedAt);
+  if (Number.isNaN(updatedAtMs)) {
+    return false;
+  }
+  const expiresMs = cacheMinutes * 60 * 1000;
+  return Date.now() - updatedAtMs < expiresMs;
 }
 
 interface AppState {
@@ -95,7 +115,12 @@ interface AppState {
 
   // 天气数据
   weather: WeatherData | null;
+  weatherStatus: 'idle' | 'loading' | 'success' | 'error';
+  weatherError: string | null;
+  weatherSettings: WeatherSettings;
   setWeather: (weather: WeatherData) => void;
+  fetchWeather: (force?: boolean) => Promise<void>;
+  updateWeatherCity: (city: string) => Promise<boolean>;
 
   // 心情
   currentMood: MoodType;
@@ -410,14 +435,69 @@ export const useAppStore = create<AppState>()(
       setHotList: (items) => set({ hotList: items }),
 
       // 天气数据
-      weather: {
-        temperature: -1,
-        condition: 'cloudy',
-        humidity: 77,
-        windLevel: '≤3级',
-        city: '保定市',
-      },
+      weather: null,
+      weatherStatus: 'idle',
+      weatherError: null,
+      weatherSettings: DEFAULT_WEATHER_SETTINGS,
       setWeather: (weather) => set({ weather }),
+      fetchWeather: async (force = false) => {
+        const state = get();
+        const cacheMinutes = state.weatherSettings.cacheMinutes || 30;
+        if (!force && isWeatherCacheValid(state.weather, cacheMinutes)) {
+          set({ weatherStatus: 'success', weatherError: null });
+          return;
+        }
+
+        set({ weatherStatus: 'loading', weatherError: null });
+        try {
+          const weather = await api.getCurrentWeather({
+            lat: state.weatherSettings.lat,
+            lon: state.weatherSettings.lon,
+            city: state.weatherSettings.city,
+            locationName: state.weatherSettings.city,
+          });
+          set({
+            weather,
+            weatherStatus: 'success',
+            weatherError: null,
+          });
+        } catch (error) {
+          console.error('Failed to fetch weather:', error);
+          set({
+            weatherStatus: 'error',
+            weatherError: error instanceof Error ? error.message : '天气获取失败',
+          });
+        }
+      },
+      updateWeatherCity: async (city) => {
+        const trimmed = city.trim();
+        if (!trimmed) {
+          toast.error('请输入城市名称');
+          return false;
+        }
+        try {
+          const geocode = await api.geocodeCity({ city: trimmed });
+          set({
+            weatherSettings: {
+              ...get().weatherSettings,
+              city: geocode.city,
+              lat: geocode.lat,
+              lon: geocode.lon,
+            },
+          });
+          await get().fetchWeather(true);
+          if (get().weatherStatus === 'error') {
+            toast.error('城市已更新，但天气刷新失败');
+            return false;
+          }
+          toast.success(`已切换到 ${geocode.city}`);
+          return true;
+        } catch (error) {
+          console.error('Failed to update weather city:', error);
+          toast.error(error instanceof Error ? error.message : '城市更新失败');
+          return false;
+        }
+      },
 
       // 心情
       currentMood: 'numb',
@@ -588,6 +668,7 @@ export const useAppStore = create<AppState>()(
           state.fetchEvents(),
           state.fetchPersonalTasks(),
           state.fetchInspirations(false),
+          state.fetchWeather(false),
         ]);
 
         // 初始化侧边栏配置（如果还没有）
@@ -654,6 +735,7 @@ export const useAppStore = create<AppState>()(
         currentPage: state.currentPage,
         hotList: state.hotList,
         weather: state.weather,
+        weatherSettings: state.weatherSettings,
         currentMood: state.currentMood,
         dailyChallenges: state.dailyChallenges,
         wishlist: state.wishlist,
@@ -667,9 +749,25 @@ export const useAppStore = create<AppState>()(
         if (!state) return;
         if (!Array.isArray(state.sidebarItems)) {
           state.sidebarItems = DEFAULT_BUILTIN_SIDEBAR_ITEMS;
-          return;
+        } else {
+          state.sidebarItems = ensureBuiltinSidebarItems(state.sidebarItems);
         }
-        state.sidebarItems = ensureBuiltinSidebarItems(state.sidebarItems);
+        if (!state.weatherSettings) {
+          state.weatherSettings = DEFAULT_WEATHER_SETTINGS;
+        }
+        if (state.weather) {
+          const maybeWeather = state.weather as Partial<WeatherData>;
+          state.weather = {
+            temperature: maybeWeather.temperature ?? 0,
+            condition: maybeWeather.condition ?? 'unknown',
+            humidity: maybeWeather.humidity ?? 0,
+            windLevel: maybeWeather.windLevel ?? '0级',
+            city: maybeWeather.city ?? state.weatherSettings.city,
+            updatedAt: maybeWeather.updatedAt ?? new Date(0).toISOString(),
+            source: maybeWeather.source ?? 'open-meteo',
+            locationName: maybeWeather.locationName ?? maybeWeather.city ?? state.weatherSettings.city,
+          };
+        }
       },
     }
   )

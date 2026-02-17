@@ -56,6 +56,9 @@ fn main() {
             commands::refresh_info_now,
             commands::get_info_refresh_status,
             commands::open_external_link,
+            // Weather commands
+            commands::geocode_city,
+            commands::get_current_weather,
             // Agent commands
             commands::agent_chat,
             commands::agent_execute_action,
