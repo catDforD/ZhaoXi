@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::Row;
+use sqlx::{Column, Row};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -181,6 +181,255 @@ struct OpenMeteoCurrent {
     relative_humidity_2m: f64,
     wind_speed_10m: f64,
     weather_code: i32,
+}
+
+const BACKUP_SCHEMA_VERSION: &str = "zhaoxi-backup/v1";
+const SQLITE_BACKUP_TABLES: [&str; 12] = [
+    "todos",
+    "projects",
+    "events",
+    "personal_tasks",
+    "inspirations",
+    "info_sources",
+    "info_settings",
+    "info_items_daily",
+    "info_refresh_logs",
+    "agent_sessions",
+    "agent_events",
+    "agent_action_audits",
+];
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupLocalState {
+    pub workbench_storage: Value,
+    pub workbench_agent_storage: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupTextFile {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSkillDir {
+    pub id: String,
+    pub files: Vec<BackupTextFile>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupAgentFiles {
+    pub mcp_servers: Vec<McpServerConfig>,
+    pub user_commands: Vec<BackupTextFile>,
+    pub user_skills: Vec<BackupSkillDir>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSqliteData {
+    pub todos: Vec<Value>,
+    pub projects: Vec<Value>,
+    pub events: Vec<Value>,
+    pub personal_tasks: Vec<Value>,
+    pub inspirations: Vec<Value>,
+    pub info_sources: Vec<Value>,
+    pub info_settings: Vec<Value>,
+    pub info_items_daily: Vec<Value>,
+    pub info_refresh_logs: Vec<Value>,
+    pub agent_sessions: Vec<Value>,
+    pub agent_events: Vec<Value>,
+    pub agent_action_audits: Vec<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupPayload {
+    pub sqlite: BackupSqliteData,
+    pub local_state: BackupLocalState,
+    pub agent_files: BackupAgentFiles,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupMeta {
+    pub app: String,
+    pub exported_at: String,
+    pub platform: String,
+    pub include_secrets: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupEnvelope {
+    pub schema_version: String,
+    pub meta: BackupMeta,
+    pub payload: BackupPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportBackupRequest {
+    pub path: String,
+    pub include_secrets: Option<bool>,
+    pub local_state: Option<BackupLocalState>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportBackupResponse {
+    pub path: String,
+    pub created_at: String,
+    pub schema_version: String,
+    pub table_counts: HashMap<String, usize>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateBackupRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateBackupResponse {
+    pub valid: bool,
+    pub schema_version: Option<String>,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBackupRequest {
+    pub path: String,
+    pub mode: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBackupResponse {
+    pub restored_at: String,
+    pub rollback_path: String,
+    pub table_counts: HashMap<String, usize>,
+    pub warnings: Vec<String>,
+    pub local_state: BackupLocalState,
+}
+
+// ============= Backup Commands =============
+
+#[command]
+pub async fn validate_backup(request: ValidateBackupRequest) -> Result<ValidateBackupResponse, String> {
+    let path = PathBuf::from(request.path.trim());
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("读取备份文件失败 ({}): {}", path.display(), e))?;
+    let parsed: BackupEnvelope = serde_json::from_str(&content)
+        .map_err(|e| format!("备份文件 JSON 解析失败: {}", e))?;
+
+    let mut issues = Vec::new();
+    if parsed.schema_version != BACKUP_SCHEMA_VERSION {
+        issues.push(format!(
+            "不支持的 schemaVersion: {} (期望 {})",
+            parsed.schema_version, BACKUP_SCHEMA_VERSION
+        ));
+    }
+
+    if parsed.payload.sqlite.todos.is_empty()
+        && parsed.payload.sqlite.projects.is_empty()
+        && parsed.payload.sqlite.events.is_empty()
+        && parsed.payload.sqlite.personal_tasks.is_empty()
+    {
+        issues.push("备份中核心业务数据为空".to_string());
+    }
+
+    Ok(ValidateBackupResponse {
+        valid: issues.is_empty(),
+        schema_version: Some(parsed.schema_version),
+        issues,
+    })
+}
+
+#[command]
+pub async fn export_backup(
+    app: AppHandle,
+    request: ExportBackupRequest,
+) -> Result<ExportBackupResponse, String> {
+    let include_secrets = request.include_secrets.unwrap_or(false);
+    let (mut envelope, mut warnings, table_counts) =
+        build_backup_envelope(&app, request.local_state, include_secrets).await?;
+    if !include_secrets {
+        sanitize_backup_envelope(&mut envelope);
+    }
+
+    let output_path = PathBuf::from(request.path.trim());
+    if output_path.as_os_str().is_empty() {
+        return Err("导出路径不能为空".to_string());
+    }
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("创建导出目录失败 ({}): {}", parent.display(), e))?;
+    }
+
+    fs::write(
+        &output_path,
+        serde_json::to_string_pretty(&envelope)
+            .map_err(|e| format!("序列化备份内容失败: {}", e))?,
+    )
+    .map_err(|e| format!("写入备份文件失败 ({}): {}", output_path.display(), e))?;
+
+    if !include_secrets {
+        warnings.push("敏感字段已按默认策略脱敏".to_string());
+    }
+
+    Ok(ExportBackupResponse {
+        path: output_path.to_string_lossy().to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        schema_version: BACKUP_SCHEMA_VERSION.to_string(),
+        table_counts,
+        warnings,
+    })
+}
+
+#[command]
+pub async fn import_backup(
+    app: AppHandle,
+    request: ImportBackupRequest,
+) -> Result<ImportBackupResponse, String> {
+    if request.mode.trim().to_lowercase() != "replace" {
+        return Err("当前仅支持 replace 导入模式".to_string());
+    }
+    let input_path = PathBuf::from(request.path.trim());
+    let input_content = fs::read_to_string(&input_path)
+        .map_err(|e| format!("读取导入文件失败 ({}): {}", input_path.display(), e))?;
+    let envelope: BackupEnvelope = serde_json::from_str(&input_content)
+        .map_err(|e| format!("导入文件解析失败: {}", e))?;
+    if envelope.schema_version != BACKUP_SCHEMA_VERSION {
+        return Err(format!(
+            "不支持的备份版本: {} (期望 {})",
+            envelope.schema_version, BACKUP_SCHEMA_VERSION
+        ));
+    }
+
+    let (rollback_path, rollback_warnings) = create_rollback_backup(&app).await?;
+    restore_sqlite_data(&envelope.payload.sqlite).await?;
+    restore_agent_files(&app, &envelope.payload.agent_files)?;
+
+    let table_counts = sqlite_table_counts_from_backup(&envelope.payload.sqlite);
+    let mut warnings = rollback_warnings;
+    if !envelope.meta.include_secrets {
+        warnings.push("导入文件为脱敏备份，敏感配置需手动补全".to_string());
+    }
+
+    Ok(ImportBackupResponse {
+        restored_at: chrono::Utc::now().to_rfc3339(),
+        rollback_path,
+        table_counts,
+        warnings,
+        local_state: envelope.payload.local_state,
+    })
 }
 
 // ============= Weather Commands =============
@@ -3726,6 +3975,508 @@ async fn insert_info_refresh_log(
     .bind(kept_count)
     .execute(pool)
     .await;
+}
+
+fn app_data_root(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))
+}
+
+fn backup_work_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_data_root(app)?.join("backups");
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create backup dir ({}): {}", dir.display(), e))?;
+    Ok(dir)
+}
+
+async fn build_backup_envelope(
+    app: &AppHandle,
+    local_state: Option<BackupLocalState>,
+    include_secrets: bool,
+) -> Result<(BackupEnvelope, Vec<String>, HashMap<String, usize>), String> {
+    let sqlite = collect_sqlite_backup().await?;
+    let table_counts = sqlite_table_counts_from_backup(&sqlite);
+    let mut warnings = Vec::new();
+    let agent_files = collect_agent_files(app, &mut warnings)?;
+    let payload = BackupPayload {
+        sqlite,
+        local_state: local_state.unwrap_or_default(),
+        agent_files,
+    };
+    let envelope = BackupEnvelope {
+        schema_version: BACKUP_SCHEMA_VERSION.to_string(),
+        meta: BackupMeta {
+            app: "ZhaoXi OS".to_string(),
+            exported_at: chrono::Utc::now().to_rfc3339(),
+            platform: env::consts::OS.to_string(),
+            include_secrets,
+        },
+        payload,
+    };
+    Ok((envelope, warnings, table_counts))
+}
+
+async fn collect_sqlite_backup() -> Result<BackupSqliteData, String> {
+    Ok(BackupSqliteData {
+        todos: query_table_rows("todos").await?,
+        projects: query_table_rows("projects").await?,
+        events: query_table_rows("events").await?,
+        personal_tasks: query_table_rows("personal_tasks").await?,
+        inspirations: query_table_rows("inspirations").await?,
+        info_sources: query_table_rows("info_sources").await?,
+        info_settings: query_table_rows("info_settings").await?,
+        info_items_daily: query_table_rows("info_items_daily").await?,
+        info_refresh_logs: query_table_rows("info_refresh_logs").await?,
+        agent_sessions: query_table_rows("agent_sessions").await?,
+        agent_events: query_table_rows("agent_events").await?,
+        agent_action_audits: query_table_rows("agent_action_audits").await?,
+    })
+}
+
+fn sqlite_table_counts_from_backup(sqlite: &BackupSqliteData) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    counts.insert("todos".to_string(), sqlite.todos.len());
+    counts.insert("projects".to_string(), sqlite.projects.len());
+    counts.insert("events".to_string(), sqlite.events.len());
+    counts.insert("personal_tasks".to_string(), sqlite.personal_tasks.len());
+    counts.insert("inspirations".to_string(), sqlite.inspirations.len());
+    counts.insert("info_sources".to_string(), sqlite.info_sources.len());
+    counts.insert("info_settings".to_string(), sqlite.info_settings.len());
+    counts.insert("info_items_daily".to_string(), sqlite.info_items_daily.len());
+    counts.insert("info_refresh_logs".to_string(), sqlite.info_refresh_logs.len());
+    counts.insert("agent_sessions".to_string(), sqlite.agent_sessions.len());
+    counts.insert("agent_events".to_string(), sqlite.agent_events.len());
+    counts.insert(
+        "agent_action_audits".to_string(),
+        sqlite.agent_action_audits.len(),
+    );
+    counts
+}
+
+async fn query_table_rows(table: &str) -> Result<Vec<Value>, String> {
+    let pool = get_db_pool()?;
+    let sql = format!("SELECT * FROM {}", quote_ident(table));
+    let rows = sqlx::query(&sql)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to query table {}: {}", table, e))?;
+    Ok(rows.into_iter().map(sqlite_row_to_json).collect())
+}
+
+fn sqlite_row_to_json(row: sqlx::sqlite::SqliteRow) -> Value {
+    let mut map = serde_json::Map::new();
+    for column in row.columns() {
+        let name = column.name();
+        if let Ok(value) = row.try_get::<Option<String>, _>(name) {
+            map.insert(
+                name.to_string(),
+                value.map(Value::String).unwrap_or(Value::Null),
+            );
+            continue;
+        }
+        if let Ok(value) = row.try_get::<Option<i64>, _>(name) {
+            map.insert(
+                name.to_string(),
+                value.map(Value::from).unwrap_or(Value::Null),
+            );
+            continue;
+        }
+        if let Ok(value) = row.try_get::<Option<f64>, _>(name) {
+            map.insert(
+                name.to_string(),
+                value.map(Value::from).unwrap_or(Value::Null),
+            );
+            continue;
+        }
+        if let Ok(value) = row.try_get::<Option<Vec<u8>>, _>(name) {
+            let json_value = match value {
+                Some(bytes) => match String::from_utf8(bytes.clone()) {
+                    Ok(text) => Value::String(text),
+                    Err(_) => Value::Array(bytes.into_iter().map(Value::from).collect()),
+                },
+                None => Value::Null,
+            };
+            map.insert(name.to_string(), json_value);
+            continue;
+        }
+        map.insert(name.to_string(), Value::Null);
+    }
+    Value::Object(map)
+}
+
+fn collect_agent_files(
+    app: &AppHandle,
+    warnings: &mut Vec<String>,
+) -> Result<BackupAgentFiles, String> {
+    let mcp_servers = load_user_mcp_servers(app).unwrap_or_default();
+    let user_commands = collect_user_commands(app, warnings)?;
+    let user_skills = collect_user_skills(app, warnings)?;
+    Ok(BackupAgentFiles {
+        mcp_servers,
+        user_commands,
+        user_skills,
+    })
+}
+
+fn collect_user_commands(
+    app: &AppHandle,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<BackupTextFile>, String> {
+    let root = ensure_user_commands_dir(app)?;
+    let mut files = Vec::new();
+    let entries = fs::read_dir(&root)
+        .map_err(|e| format!("Failed to read user commands dir ({}): {}", root.display(), e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        match fs::read_to_string(&path) {
+            Ok(content) => files.push(BackupTextFile {
+                path: file_name.to_string(),
+                content,
+            }),
+            Err(error) => warnings.push(format!(
+                "跳过命令文件 {}: {}",
+                path.display(),
+                error
+            )),
+        }
+    }
+    Ok(files)
+}
+
+fn collect_user_skills(
+    app: &AppHandle,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<BackupSkillDir>, String> {
+    let skills_root = ensure_user_skills_dir(app)?;
+    let mut result = Vec::new();
+    let entries = fs::read_dir(&skills_root).map_err(|e| {
+        format!(
+            "Failed to read user skills dir ({}): {}",
+            skills_root.display(),
+            e
+        )
+    })?;
+    for entry in entries.flatten() {
+        let skill_dir = entry.path();
+        if !skill_dir.is_dir() {
+            continue;
+        }
+        let Some(skill_id) = skill_dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let mut files = Vec::new();
+        collect_text_files_recursive(&skill_dir, &skill_dir, &mut files, warnings)?;
+        result.push(BackupSkillDir {
+            id: skill_id.to_string(),
+            files,
+        });
+    }
+    Ok(result)
+}
+
+fn collect_text_files_recursive(
+    root: &Path,
+    current: &Path,
+    out: &mut Vec<BackupTextFile>,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(current)
+        .map_err(|e| format!("Failed to read {}: {}", current.display(), e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_text_files_recursive(root, &path, out, warnings)?;
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative_str = relative.to_string_lossy().to_string();
+        match fs::read_to_string(&path) {
+            Ok(content) => out.push(BackupTextFile {
+                path: relative_str,
+                content,
+            }),
+            Err(error) => warnings.push(format!("跳过非文本文件 {}: {}", path.display(), error)),
+        }
+    }
+    Ok(())
+}
+
+fn sanitize_backup_envelope(envelope: &mut BackupEnvelope) {
+    envelope.meta.include_secrets = false;
+    sanitize_json_value(&mut envelope.payload.local_state.workbench_storage);
+    sanitize_json_value(&mut envelope.payload.local_state.workbench_agent_storage);
+    for server in &mut envelope.payload.agent_files.mcp_servers {
+        for (key, value) in &mut server.env {
+            if is_sensitive_key(key) {
+                *value = String::new();
+            }
+        }
+    }
+}
+
+fn sanitize_json_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, entry) in map {
+                if is_sensitive_key(key) {
+                    *entry = Value::String(String::new());
+                } else {
+                    sanitize_json_value(entry);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                sanitize_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    normalized.contains("api_key")
+        || normalized.contains("apikey")
+        || normalized.contains("token")
+        || normalized.contains("secret")
+        || normalized.contains("password")
+}
+
+async fn create_rollback_backup(app: &AppHandle) -> Result<(String, Vec<String>), String> {
+    let mut warnings = Vec::new();
+    let (mut envelope, mut collect_warnings, _) = build_backup_envelope(app, None, false).await?;
+    warnings.append(&mut collect_warnings);
+    sanitize_backup_envelope(&mut envelope);
+
+    let rollback_dir = backup_work_dir(app)?;
+    let rollback_path = rollback_dir.join(format!(
+        "rollback-{}.json",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    ));
+    fs::write(
+        &rollback_path,
+        serde_json::to_string_pretty(&envelope)
+            .map_err(|e| format!("Failed to serialize rollback backup: {}", e))?,
+    )
+    .map_err(|e| format!("Failed to write rollback backup: {}", e))?;
+    Ok((rollback_path.to_string_lossy().to_string(), warnings))
+}
+
+async fn restore_sqlite_data(sqlite: &BackupSqliteData) -> Result<(), String> {
+    let pool = get_db_pool()?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to start import transaction: {}", e))?;
+
+    for table in SQLITE_BACKUP_TABLES {
+        let delete_sql = format!("DELETE FROM {}", quote_ident(table));
+        sqlx::query(&delete_sql)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to clear table {}: {}", table, e))?;
+    }
+
+    insert_json_rows(&mut tx, "todos", &sqlite.todos).await?;
+    insert_json_rows(&mut tx, "projects", &sqlite.projects).await?;
+    insert_json_rows(&mut tx, "events", &sqlite.events).await?;
+    insert_json_rows(&mut tx, "personal_tasks", &sqlite.personal_tasks).await?;
+    insert_json_rows(&mut tx, "inspirations", &sqlite.inspirations).await?;
+    insert_json_rows(&mut tx, "info_sources", &sqlite.info_sources).await?;
+    insert_json_rows(&mut tx, "info_settings", &sqlite.info_settings).await?;
+    insert_json_rows(&mut tx, "info_items_daily", &sqlite.info_items_daily).await?;
+    insert_json_rows(&mut tx, "info_refresh_logs", &sqlite.info_refresh_logs).await?;
+    insert_json_rows(&mut tx, "agent_sessions", &sqlite.agent_sessions).await?;
+    insert_json_rows(&mut tx, "agent_events", &sqlite.agent_events).await?;
+    insert_json_rows(&mut tx, "agent_action_audits", &sqlite.agent_action_audits).await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit import transaction: {}", e))?;
+    Ok(())
+}
+
+async fn insert_json_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    rows: &[Value],
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let allowed_columns = get_table_columns(tx, table).await?;
+    for row in rows {
+        let Some(map) = row.as_object() else {
+            continue;
+        };
+
+        let keys = map
+            .keys()
+            .filter(|key| allowed_columns.contains(*key))
+            .cloned()
+            .collect::<BTreeSet<String>>();
+        if keys.is_empty() {
+            continue;
+        }
+
+        let columns = keys
+            .iter()
+            .map(|key| quote_ident(key))
+            .collect::<Vec<String>>()
+            .join(", ");
+        let placeholders = vec!["?"; keys.len()].join(", ");
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            quote_ident(table),
+            columns,
+            placeholders
+        );
+
+        let mut query = sqlx::query(&sql);
+        for key in &keys {
+            let value = map.get(key).unwrap_or(&Value::Null);
+            query = bind_json_value(query, value)?;
+        }
+        query
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| format!("Failed to insert row into {}: {}", table, e))?;
+    }
+
+    Ok(())
+}
+
+async fn get_table_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+) -> Result<HashSet<String>, String> {
+    let sql = format!("PRAGMA table_info({})", quote_ident(table));
+    let rows = sqlx::query(&sql)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|e| format!("Failed to query table_info {}: {}", table, e))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.try_get::<String, _>("name").ok())
+        .collect())
+}
+
+fn bind_json_value<'q>(
+    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    value: &Value,
+) -> Result<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>, String> {
+    Ok(match value {
+        Value::Null => query.bind(Option::<String>::None),
+        Value::Bool(value) => query.bind(if *value { 1_i64 } else { 0_i64 }),
+        Value::Number(number) => {
+            if let Some(v) = number.as_i64() {
+                query.bind(v)
+            } else if let Some(v) = number.as_f64() {
+                query.bind(v)
+            } else {
+                return Err("Unsupported number format in backup".to_string());
+            }
+        }
+        Value::String(value) => query.bind(value.clone()),
+        Value::Array(_) | Value::Object(_) => query.bind(
+            serde_json::to_string(value)
+                .map_err(|e| format!("Failed to serialize JSON cell value: {}", e))?,
+        ),
+    })
+}
+
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('\"', "\"\""))
+}
+
+fn restore_agent_files(app: &AppHandle, agent_files: &BackupAgentFiles) -> Result<(), String> {
+    write_user_mcp_servers(app, &agent_files.mcp_servers)?;
+    restore_user_commands(app, &agent_files.user_commands)?;
+    restore_user_skills(app, &agent_files.user_skills)?;
+    Ok(())
+}
+
+fn restore_user_commands(app: &AppHandle, files: &[BackupTextFile]) -> Result<(), String> {
+    let root = ensure_user_commands_dir(app)?;
+    let entries = fs::read_dir(&root)
+        .map_err(|e| format!("Failed to read commands dir ({}): {}", root.display(), e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("md") && path.is_file() {
+            fs::remove_file(&path)
+                .map_err(|e| format!("Failed to remove command file {}: {}", path.display(), e))?;
+        }
+    }
+
+    for file in files {
+        let file_path = root.join(&file.path);
+        if !is_safe_relative_path(&file.path) {
+            return Err(format!("Unsafe command path in backup: {}", file.path));
+        }
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create command parent dir: {}", e))?;
+        }
+        fs::write(&file_path, &file.content)
+            .map_err(|e| format!("Failed to restore command file {}: {}", file_path.display(), e))?;
+    }
+    Ok(())
+}
+
+fn restore_user_skills(app: &AppHandle, skills: &[BackupSkillDir]) -> Result<(), String> {
+    let root = ensure_user_skills_dir(app)?;
+    if root.exists() {
+        fs::remove_dir_all(&root)
+            .map_err(|e| format!("Failed to clear user skills dir ({}): {}", root.display(), e))?;
+    }
+    fs::create_dir_all(&root)
+        .map_err(|e| format!("Failed to recreate skills dir ({}): {}", root.display(), e))?;
+
+    for skill in skills {
+        if !is_safe_relative_path(&skill.id) {
+            return Err(format!("Unsafe skill id in backup: {}", skill.id));
+        }
+        let skill_root = root.join(&skill.id);
+        fs::create_dir_all(&skill_root)
+            .map_err(|e| format!("Failed to create skill dir {}: {}", skill_root.display(), e))?;
+        for file in &skill.files {
+            if !is_safe_relative_path(&file.path) {
+                return Err(format!(
+                    "Unsafe skill file path in backup: {}/{}",
+                    skill.id, file.path
+                ));
+            }
+            let file_path = skill_root.join(&file.path);
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create skill parent dir: {}", e))?;
+            }
+            fs::write(&file_path, &file.content)
+                .map_err(|e| format!("Failed to restore skill file {}: {}", file_path.display(), e))?;
+        }
+    }
+    Ok(())
+}
+
+fn is_safe_relative_path(path: &str) -> bool {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return false;
+    }
+    !candidate
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
 }
 
 fn default_true() -> bool {

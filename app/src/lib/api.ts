@@ -244,3 +244,59 @@ export async function geocodeCity(request: GeocodeCityRequest): Promise<GeocodeC
 export async function getCurrentWeather(request: GetCurrentWeatherRequest): Promise<WeatherData> {
   return invoke('get_current_weather', { request });
 }
+
+// ============= Backup API =============
+
+export interface BackupLocalState {
+  workbenchStorage: unknown;
+  workbenchAgentStorage: unknown;
+}
+
+export interface ExportBackupRequest {
+  path: string;
+  includeSecrets?: boolean;
+  localState?: BackupLocalState;
+}
+
+export interface ExportBackupResponse {
+  path: string;
+  createdAt: string;
+  schemaVersion: string;
+  tableCounts: Record<string, number>;
+  warnings: string[];
+}
+
+export interface ValidateBackupRequest {
+  path: string;
+}
+
+export interface ValidateBackupResponse {
+  valid: boolean;
+  schemaVersion?: string;
+  issues: string[];
+}
+
+export interface ImportBackupRequest {
+  path: string;
+  mode: 'replace';
+}
+
+export interface ImportBackupResponse {
+  restoredAt: string;
+  rollbackPath: string;
+  tableCounts: Record<string, number>;
+  warnings: string[];
+  localState: BackupLocalState;
+}
+
+export async function validateBackup(request: ValidateBackupRequest): Promise<ValidateBackupResponse> {
+  return invoke('validate_backup', { request });
+}
+
+export async function exportBackup(request: ExportBackupRequest): Promise<ExportBackupResponse> {
+  return invoke('export_backup', { request });
+}
+
+export async function importBackup(request: ImportBackupRequest): Promise<ImportBackupResponse> {
+  return invoke('import_backup', { request });
+}

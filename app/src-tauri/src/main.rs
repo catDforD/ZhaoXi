@@ -59,6 +59,10 @@ fn main() {
             // Weather commands
             commands::geocode_city,
             commands::get_current_weather,
+            // Backup commands
+            commands::validate_backup,
+            commands::export_backup,
+            commands::import_backup,
             // Agent commands
             commands::agent_chat,
             commands::agent_execute_action,

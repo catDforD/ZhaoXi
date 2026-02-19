@@ -19,6 +19,9 @@ import { useAppStore } from '@/stores/appStore';
 import { cn } from '@/lib/utils';
 import { DynamicIcon } from '@/components/features/DynamicIcon';
 import { SidebarSettingsDialog } from '@/components/features/SidebarSettingsDialog';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { toast } from 'sonner';
+import { exportBackup, importBackup, validateBackup } from '@/lib/api';
 import {
   Dialog,
   DialogContent,
@@ -64,6 +67,8 @@ export function Sidebar({ className }: SidebarProps) {
   } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarSettingsOpen, setSidebarSettingsOpen] = useState(false);
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [isImportingBackup, setIsImportingBackup] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -79,6 +84,134 @@ export function Sidebar({ className }: SidebarProps) {
 
   const handleRemoveBackground = () => {
     setBackgroundImage(null);
+  };
+
+  const handleExportBackup = async () => {
+    if (isExportingBackup || isImportingBackup) return;
+
+    try {
+      setIsExportingBackup(true);
+      const fileName = `zhaoxi-backup-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+      let filePath: string | null = null;
+
+      try {
+        const selected = await saveDialog({
+          title: '导出工作台备份',
+          defaultPath: fileName,
+          filters: [{ name: 'JSON', extensions: ['json'] }],
+        });
+        if (selected && !Array.isArray(selected)) {
+          filePath = selected;
+        }
+      } catch (dialogError) {
+        console.error('save dialog failed, fallback to directory picker:', dialogError);
+      }
+
+      // 某些桌面环境 save 对话框可能不可用，回退到目录选择后自动拼接文件名
+      if (!filePath) {
+        const selectedDir = await openDialog({
+          title: '选择导出目录',
+          directory: true,
+          multiple: false,
+        });
+        if (selectedDir && !Array.isArray(selectedDir)) {
+          const separator = selectedDir.includes('\\') ? '\\' : '/';
+          const needSep = !selectedDir.endsWith('/') && !selectedDir.endsWith('\\');
+          filePath = `${selectedDir}${needSep ? separator : ''}${fileName}`;
+        }
+      }
+
+      if (!filePath) {
+        toast.info('已取消导出');
+        return;
+      }
+
+      const rawWorkbenchStorage = localStorage.getItem('workbench-storage');
+      const rawAgentStorage = localStorage.getItem('workbench-agent-storage');
+      const localState = {
+        workbenchStorage: rawWorkbenchStorage ? JSON.parse(rawWorkbenchStorage) : {},
+        workbenchAgentStorage: rawAgentStorage ? JSON.parse(rawAgentStorage) : {},
+      };
+      const result = await exportBackup({
+        path: filePath,
+        includeSecrets: false,
+        localState,
+      });
+      const totalRows = Object.values(result.tableCounts).reduce((sum, count) => sum + count, 0);
+      toast.success(`导出成功：${totalRows} 条记录`);
+      if (result.warnings.length > 0) {
+        toast.info(result.warnings[0]);
+      }
+    } catch (error) {
+      console.error('Failed to export backup:', error);
+      toast.error(error instanceof Error ? error.message : '导出失败');
+    } finally {
+      setIsExportingBackup(false);
+    }
+  };
+
+  const handleImportBackup = async () => {
+    if (isExportingBackup || isImportingBackup) return;
+    let selected: string | null = null;
+    try {
+      const picked = await openDialog({
+        title: '选择备份文件',
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (picked && !Array.isArray(picked)) {
+        selected = picked;
+      }
+    } catch (dialogError) {
+      console.error('open import dialog failed:', dialogError);
+      toast.error(
+        dialogError instanceof Error
+          ? `无法打开导入对话框: ${dialogError.message}`
+          : '无法打开导入对话框'
+      );
+      return;
+    }
+    if (!selected) return;
+
+    try {
+      setIsImportingBackup(true);
+      const check = await validateBackup({ path: selected });
+      if (!check.valid) {
+        toast.error(check.issues[0] ?? '备份文件校验失败');
+        return;
+      }
+
+      const confirmed = window.confirm(
+        '导入将覆盖当前所有数据，并在完成后自动重载应用。是否继续？'
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      const result = await importBackup({
+        path: selected,
+        mode: 'replace',
+      });
+
+      localStorage.setItem('workbench-storage', JSON.stringify(result.localState.workbenchStorage ?? {}));
+      localStorage.setItem(
+        'workbench-agent-storage',
+        JSON.stringify(result.localState.workbenchAgentStorage ?? {})
+      );
+
+      toast.success('导入成功，应用即将自动重载');
+      if (result.warnings.length > 0) {
+        toast.info(result.warnings[0]);
+      }
+      toast.info(`已创建回滚备份：${result.rollbackPath}`);
+      setTimeout(() => window.location.reload(), 300);
+    } catch (error) {
+      console.error('Failed to import backup:', error);
+      toast.error(error instanceof Error ? error.message : '导入失败');
+    } finally {
+      setIsImportingBackup(false);
+    }
   };
 
   // 获取内置页面定义
@@ -262,6 +395,32 @@ export function Sidebar({ className }: SidebarProps) {
               </Button>
               <p className="text-xs text-white/40 mt-2">
                 自定义显示在侧边栏的页面和应用
+              </p>
+            </div>
+
+            {/* 数据管理 */}
+            <div className="pt-4 border-t border-white/10">
+              <h3 className="text-sm font-medium text-white mb-3">数据管理</h3>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  disabled={isExportingBackup || isImportingBackup}
+                  onClick={() => void handleExportBackup()}
+                  className="bg-white/5 border-white/10 text-white hover:bg-white/10 disabled:opacity-50"
+                >
+                  导出数据
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={isExportingBackup || isImportingBackup}
+                  onClick={() => void handleImportBackup()}
+                  className="bg-white/5 border-white/10 text-white hover:bg-white/10 disabled:opacity-50"
+                >
+                  导入数据
+                </Button>
+              </div>
+              <p className="text-xs text-white/40 mt-2">
+                导入会覆盖当前数据并自动重载。默认备份不包含敏感密钥。
               </p>
             </div>
           </div>
